@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,6 +339,106 @@ func TestPrimaryArtifact(t *testing.T) {
 	}
 	if PrimaryArtifact("vuln-scan", artifacts) != nil {
 		t.Error("vuln-scan should have no primary here")
+	}
+}
+
+// modelCheckHarness wraps the claude adapter with a model check result, to
+// exercise the pre-flight availability path without a real harness.
+type modelCheckHarness struct {
+	*harness.Claude
+	checkErr error
+}
+
+func (m modelCheckHarness) CheckModel(_ context.Context, _ string) error { return m.checkErr }
+
+func TestRunModelCheckFailsFast(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	state := testState(t)
+	client := &fakeAPI{}
+	sink := &recSink{}
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: client, Harness: modelCheckHarness{
+			&harness.Claude{}, fmt.Errorf("model %q is not in `crush models`", "claude-mythos-5"),
+		},
+		Skill: testSkill(), DeclareSpend: true,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != ExitError {
+		t.Fatalf("exit = %d, want 1", res.ExitCode)
+	}
+	if res.Artifacts != nil || res.SpendRecorded || res.HarnessExit != 0 {
+		t.Errorf("harness should never have launched: %+v", res)
+	}
+	if !strings.Contains(res.HarnessError, "not runnable") || !strings.Contains(res.HarnessError, "model-registry.yaml") {
+		t.Errorf("harness error lacks guidance: %q", res.HarnessError)
+	}
+	warned := false
+	for _, p := range sink.progress {
+		if strings.Contains(p, "not runnable") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("model check failure not surfaced to the sink")
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "result.json")); err != nil {
+		t.Errorf("failed pre-flight should still journal: %v", err)
+	}
+}
+
+func TestRunHarnessErrorSurfacesStderrTail(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	t.Setenv("FAKE_CLAUDE_MODE", "fail")
+	state := testState(t)
+	sink := &recSink{}
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: &fakeAPI{}, Harness: &harness.Claude{},
+		Skill: testSkill(), DeclareSpend: true,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != ExitError || res.HarnessExit != 3 {
+		t.Fatalf("exit = %d, harness exit = %d", res.ExitCode, res.HarnessExit)
+	}
+	if !strings.Contains(res.HarnessError, "401 Unauthorized") {
+		t.Errorf("harness error should carry the stderr tail: %q", res.HarnessError)
+	}
+	surfaced := false
+	for _, p := range sink.progress {
+		if strings.Contains(p, "401 Unauthorized") {
+			surfaced = true
+		}
+	}
+	if !surfaced {
+		t.Error("provider error not surfaced to the sink")
+	}
+}
+
+func TestRunFailedRunStillDiscoversArtifacts(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	t.Setenv("FAKE_CLAUDE_MODE", "partial")
+	state := testState(t)
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: &fakeAPI{}, Harness: &harness.Claude{},
+		Skill: testSkill(), DeclareSpend: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != ExitError || res.HarnessExit != 1 {
+		t.Fatalf("exit = %d, harness exit = %d", res.ExitCode, res.HarnessExit)
+	}
+	if len(res.Artifacts) != 1 || !strings.HasSuffix(res.Artifacts[0].Path, "fixture-security-audit.json") {
+		t.Fatalf("partial output should still be discovered: %+v", res.Artifacts)
+	}
+	if !res.Artifacts[0].Valid {
+		t.Errorf("partial artifact should still validate: %+v", res.Artifacts[0])
 	}
 }
 

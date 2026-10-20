@@ -57,11 +57,10 @@ type rawPolicy struct {
 	Units          string           `yaml:"units"`
 	PerRunDefaults map[string]int64 `yaml:"per_run_defaults"`
 	PerRunDefault  *int64           `yaml:"per_run_default"`
-	Bands          *struct {
-		Warn    *float64 `yaml:"warn"`
-		Degrade *float64 `yaml:"degrade"`
-		Refuse  *float64 `yaml:"refuse"`
-	} `yaml:"bands"`
+	// Bands accepts both shipped shapes: the map form ({warn: 1.5, ...})
+	// and the sequence form the harness actually ships
+	// (- {at: 1.5, action: warn}).
+	Bands any `yaml:"bands"`
 }
 
 type policyFile struct {
@@ -116,17 +115,55 @@ func LoadPolicy(configHome string) (*Policy, error) {
 		delete(p.PerRun, "default")
 	}
 	if rp.Bands != nil {
-		if rp.Bands.Warn != nil {
-			p.Warn = *rp.Bands.Warn
-		}
-		if rp.Bands.Degrade != nil {
-			p.Degrade = *rp.Bands.Degrade
-		}
-		if rp.Bands.Refuse != nil {
-			p.Refuse = *rp.Bands.Refuse
-		}
+		applyBands(p, rp.Bands)
 	}
 	return p, nil
+}
+
+// applyBands folds the two shipped band shapes into the policy.
+func applyBands(p *Policy, bands any) {
+	set := func(action string, at float64) {
+		switch action {
+		case "warn":
+			p.Warn = at
+		case "degrade":
+			p.Degrade = at
+		case "refuse":
+			p.Refuse = at
+		}
+	}
+	switch b := bands.(type) {
+	case []any: // sequence form: - {at: 1.5, action: warn}
+		for _, entry := range b {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			set(toString(m["action"]), toFloat(m["at"]))
+		}
+	case map[string]any: // map form: {warn: 1.5, degrade: 2.0, refuse: 3.0}
+		for action, v := range b {
+			set(action, toFloat(v))
+		}
+	}
+}
+
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func toString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // CapFor returns the per-run output-token cap for a skill.

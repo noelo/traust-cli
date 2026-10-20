@@ -100,6 +100,15 @@ type Harness interface {
 	Notes() []string
 }
 
+// ModelChecker is implemented by harnesses that can verify a model id is
+// runnable before the process launches. The runner uses it to fail fast
+// with actionable guidance — a registry floor model the local harness
+// cannot authenticate to otherwise dies two seconds later with an opaque
+// provider 401.
+type ModelChecker interface {
+	CheckModel(ctx context.Context, model string) error
+}
+
 // IDs returns the harness priority order.
 func IDs() []string {
 	return []string{"claude", "codex", "pi", "opencode", "crush", "goose"}

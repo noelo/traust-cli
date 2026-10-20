@@ -97,8 +97,12 @@ type RunResult struct {
 	BudgetRefused bool       `json:"budget_refused"`
 	Aborted       bool       `json:"aborted"`
 	HarnessExit   int        `json:"harness_exit"`
-	ResultText    string     `json:"result_text,omitempty"`
-	ExitCode      int        `json:"exit_code"`
+	// HarnessError carries the process failure plus the tail of the
+	// harness stderr log, so the actual provider error (e.g. a 401) is
+	// visible without opening the journal by hand.
+	HarnessError string `json:"harness_error,omitempty"`
+	ResultText   string `json:"result_text,omitempty"`
+	ExitCode     int    `json:"exit_code"`
 }
 
 // Run executes the skill through the harness.
@@ -150,6 +154,31 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		return nil, err
 	}
 	res.Dir = journal.Dir
+
+	// Pre-flight model availability: when the harness can verify model ids,
+	// fail fast with guidance instead of an opaque provider 401 two
+	// seconds into the run.
+	if pf.Model != "" {
+		if mc, ok := h.(harness.ModelChecker); ok {
+			if err := mc.CheckModel(ctx, pf.Model); err != nil {
+				msg := fmt.Sprintf("model %q is not runnable in %s (%v)", pf.Model, h.DisplayName(), err)
+				if pf.Role != "" {
+					msg += fmt.Sprintf(" — the registry floor for role %q resolved to it; map the role to a model your harness can run in %s (traust registry models resolve %s), or pass --model", pf.Role, filepath.Join(state.ConfigHome, "model-registry.yaml"), pf.Role)
+				} else {
+					msg += " — pass a --model your harness can run"
+				}
+				res.ExitCode = ExitError
+				res.HarnessError = msg
+				sink.Progress(msg)
+				if jerr := journal.WriteResult(res); jerr != nil {
+					sink.Progress("warning: could not write run journal: " + jerr.Error())
+				}
+				sink.Done()
+				return res, nil
+			}
+		}
+	}
+
 	before := snapshotArtifacts(root)
 
 	// Capability caveats, up front.
@@ -238,7 +267,11 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		sink.Progress("run aborted")
 	case waitErr != nil:
 		res.ExitCode = ExitError
-		sink.Progress(fmt.Sprintf("harness exited with error: %v (stderr: %s)", waitErr, stderrPath))
+		res.HarnessError = waitErr.Error()
+		if tail := fileTail(stderrPath, 12); tail != "" {
+			res.HarnessError += "\n" + tail
+		}
+		sink.Progress("harness exited with error: " + res.HarnessError)
 	case scanErr != nil:
 		res.ExitCode = ExitError
 		sink.Progress(fmt.Sprintf("stream read error: %v", scanErr))
@@ -248,9 +281,11 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		res.ResultText = strings.TrimRight(plainOut.String(), "\n")
 	}
 
-	// Post-run: artifacts, validation, rendering, spend — unless the run was
-	// aborted or refused before producing trustworthy output.
-	if res.ExitCode == ExitOK || (res.ExitCode == ExitError && res.HarnessExit == 0) {
+	// Post-run: artifacts, validation, rendering, spend. Discovery runs even
+	// for failed, refused or aborted runs — partial outputs are exactly what
+	// the user needs to see when a run dies mid-flight, and skills checkpoint
+	// their state for resume.
+	{
 		after := snapshotArtifacts(root)
 		res.Artifacts = discoverArtifacts(root, before, after)
 		validateArtifacts(ctx, opts.API, res.Artifacts, opts.StrictValidation)
@@ -288,6 +323,19 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	}
 	sink.Done()
 	return res, nil
+}
+
+// fileTail returns the last n lines of a file, or "" when unreadable.
+func fileTail(path string, n int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // applyEvent folds a stream event into the run result. Usage is cumulative in
