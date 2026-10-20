@@ -16,52 +16,111 @@ import (
 
 // reportModel browses a report's findings: a severity-colored table with a
 // glamour-rendered detail pane. Read-only.
+//
+// Everything width-dependent (table columns, markdown word wrap) is derived
+// from the CURRENT width and rebuilt on every WindowSizeMsg, so resizing the
+// terminal reflows the layout instead of clipping to the startup size.
 type reportModel struct {
-	styles        theme.Styles
-	table         table.Model
-	viewport      viewport.Model
-	report        *views.Report
-	mode          string // "table" | "detail"
-	renderer      *glamour.TermRenderer
-	width, height int
+	styles   theme.Styles
+	table    table.Model
+	viewport viewport.Model
+	report   *views.Report
+	// sorted holds the severity-ordered findings; rows are derived from it
+	// at the CURRENT width in buildTable, so a resize re-truncates them.
+	sorted   []views.Finding
+	mode     string // "table" | "detail"
+	detailMD string
+	renderer *glamour.TermRenderer
+	width    int
+	height   int
+	// tableBuilt distinguishes "no table yet" from a zero-value table
+	// (table.Model is a struct, not a pointer).
+	tableBuilt bool
 }
 
 var severityOrder = map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "none": 5, "unrated": 6}
 
 func newReportModel(rep *views.Report, width, height int) reportModel {
 	styles := theme.Default()
-	cols := []table.Column{
-		{Title: "SEV", Width: 9},
-		{Title: "ID", Width: 30},
-		{Title: "TITLE", Width: width - 45},
-	}
-	rows := make([]table.Row, 0, len(rep.Findings))
+	m := reportModel{styles: styles, report: rep, mode: "table", width: width, height: height}
+
 	sorted := make([]views.Finding, len(rep.Findings))
 	copy(sorted, rep.Findings)
-	// Sort by severity, stable.
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && severityOrder[sevKey(sorted[j])] < severityOrder[sevKey(sorted[j-1])]; j-- {
 			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
 		}
 	}
-	for _, f := range sorted {
+	m.sorted = sorted
+
+	m.viewport = viewport.New(width-4, height-10)
+	m.buildTable()
+	m.buildRenderer()
+	return m
+}
+
+// buildTable (re)creates the findings table with column widths derived from
+// the current terminal width, re-truncating the rows to match and preserving
+// the cursor.
+func (m *reportModel) buildTable() {
+	sevW := 9
+	idW := clampInt(m.width/4, 10, 30)
+	titleW := maxInt(m.width-6-sevW-idW, 12)
+	cols := []table.Column{
+		{Title: "SEV", Width: sevW},
+		{Title: "ID", Width: idW},
+		{Title: "TITLE", Width: titleW},
+	}
+	rows := make([]table.Row, 0, len(m.sorted))
+	for _, f := range m.sorted {
 		id := f.ID
 		if id == "" {
 			id = "—"
 		}
-		if len(id) > 28 {
-			id = id[:27] + "…"
-		}
-		rows = append(rows, table.Row([]string{strings.ToUpper(f.Severity), id, f.Title}))
+		rows = append(rows, table.Row([]string{
+			strings.ToUpper(f.Severity),
+			clip(id, idW-1),
+			clip(f.Title, titleW-1),
+		}))
 	}
-	t := table.New(table.WithColumns(cols), table.WithRows(rows), table.WithHeight(minInt(height-8, 20)), table.WithWidth(width-4))
+	t := table.New(
+		table.WithColumns(cols),
+		table.WithRows(rows),
+		table.WithHeight(clampInt(m.height-10, 5, 20)),
+		table.WithWidth(maxInt(m.width-4, 20)),
+	)
 	t.SetStyles(table.Styles{
-		Header:   styles.Header.BorderStyle(lipgloss.NormalBorder()).BorderBottom(true).BorderForeground(theme.Palette.Muted),
+		Header:   m.styles.Header.BorderStyle(lipgloss.NormalBorder()).BorderBottom(true).BorderForeground(theme.Palette.Muted),
 		Selected: lipgloss.NewStyle().Bold(true).Foreground(theme.Palette.Text).Background(theme.Palette.Surface),
 	})
-	vp := viewport.New(width-4, height-10)
-	renderer, _ := glamour.NewTermRenderer(glamour.WithWordWrap(width-8), glamour.WithStandardStyle("dark"))
-	return reportModel{styles: styles, table: t, viewport: vp, report: rep, mode: "table", renderer: renderer, width: width, height: height}
+	if m.tableBuilt {
+		t.SetCursor(m.table.Cursor())
+	}
+	m.table = t
+	m.tableBuilt = true
+}
+
+// clip truncates a plain string to n cells.
+func clip(s string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	if len(s) > n {
+		return s[:n-1] + "…"
+	}
+	return s
+}
+
+// buildRenderer (re)creates the glamour renderer at the current width and
+// re-renders the open detail pane.
+func (m *reportModel) buildRenderer() {
+	r, err := glamour.NewTermRenderer(glamour.WithWordWrap(maxInt(m.width-8, 20)), glamour.WithStandardStyle("dark"))
+	if err == nil {
+		m.renderer = r
+	}
+	if m.mode == "detail" {
+		m.renderDetail()
+	}
 }
 
 func sevKey(f views.Finding) string {
@@ -77,8 +136,10 @@ func (m reportModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = msg.Height - 10
+		m.viewport.Width = maxInt(msg.Width-4, 20)
+		m.viewport.Height = maxInt(msg.Height-10, 3)
+		m.buildTable()
+		m.buildRenderer()
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -110,10 +171,17 @@ func (m *reportModel) showDetail(idx int) {
 		return
 	}
 	f := m.report.Findings[idx]
-	md := fmt.Sprintf("# %s\n\n**Severity:** %s  ·  **ID:** %s\n\n%s\n", f.Title, f.Severity, f.ID, f.Description)
-	rendered := md
+	m.detailMD = fmt.Sprintf("# %s\n\n**Severity:** %s  ·  **ID:** %s\n\n%s\n", f.Title, f.Severity, f.ID, f.Description)
+	m.renderDetail()
+}
+
+func (m *reportModel) renderDetail() {
+	if m.detailMD == "" {
+		return
+	}
+	rendered := m.detailMD
 	if m.renderer != nil {
-		if out, err := m.renderer.Render(md); err == nil {
+		if out, err := m.renderer.Render(m.detailMD); err == nil {
 			rendered = out
 		}
 	}
@@ -131,9 +199,9 @@ func (m reportModel) View() string {
 		}
 	}
 	title := m.styles.App.Render(" traust ") + m.styles.Header.Render(" "+shortPath(m.report.Path))
-	b.WriteString("\n" + title + "\n")
+	b.WriteString("\n" + Truncate(title, m.width, "…") + "\n")
 	if len(parts) > 0 {
-		b.WriteString(strings.Join(parts, "  ") + "\n")
+		b.WriteString(Truncate(strings.Join(parts, "  "), m.width, "") + "\n")
 	}
 	b.WriteString("\n")
 
@@ -165,11 +233,4 @@ func shortPath(p string) string {
 		return "…/" + strings.Join(parts[len(parts)-3:], "/")
 	}
 	return p
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -138,7 +138,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case itemEvent:
 			m.applyEvent(msg.ev)
 		case itemRaw:
-			m.pushLine(m.styles.Muted.Render("  " + truncateLine(msg.text, m.width-4)))
+			m.pushLine(m.styles.Muted.Render("  " + msg.text))
 		case itemProgress:
 			style := m.styles.Accent
 			if strings.HasPrefix(msg.text, "warning:") || strings.HasPrefix(msg.text, "note:") {
@@ -167,6 +167,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.viewport.Width = msg.Width - 2
 		m.viewport.Height = msg.Height - 8
+		m.rebuild()
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -205,7 +206,7 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *monitorModel) applyEvent(ev harness.Event) {
 	switch ev.Kind {
 	case harness.EventText:
-		m.pushLine(truncateLine(ev.Text, m.width-4))
+		m.pushLine(ev.Text)
 	case harness.EventToolCall:
 		m.pushLine(m.styles.Accent.Render("→ " + ev.Tool))
 	case harness.EventUsage:
@@ -214,23 +215,45 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 		m.tokensIn, m.tokensOut = ev.TokensIn, ev.TokensOut
 		m.cost = ev.CostUSD
 		if ev.Text != "" {
-			m.pushLine(m.styles.OK.Render("✓ " + truncateLine(ev.Text, m.width-4)))
+			m.pushLine(m.styles.OK.Render("✓ " + ev.Text))
 		}
 	case harness.EventError:
 		m.failed = true
-		m.pushLine(m.styles.Err.Render("✗ " + truncateLine(ev.Text, m.width-4)))
+		m.pushLine(m.styles.Err.Render("✗ " + ev.Text))
 	case harness.EventNeedsInput:
 		m.failed = true
 		m.pushLine(m.styles.Err.Render("✗ the skill asked for interactive input — run it interactively in your harness"))
 	}
 }
 
+// pushLine stores a styled line UNWRAPPED and rebuilds the viewport at the
+// current width. Lines are wrapped, never truncated — the transcript stays
+// complete at any terminal size.
 func (m *monitorModel) pushLine(line string) {
-	m.lines = append(m.lines, line)
+	line = strings.ReplaceAll(line, "\r", "")
+	for _, l := range strings.Split(line, "\n") {
+		m.lines = append(m.lines, l)
+	}
 	if len(m.lines) > 1000 {
 		m.lines = m.lines[len(m.lines)-1000:]
 	}
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.rebuild()
+}
+
+// rebuild re-wraps every retained line at the current viewport width. This
+// is what makes a terminal resize actually take effect: previously pushed
+// lines re-flow instead of staying clipped to whatever the width was when
+// they arrived.
+func (m *monitorModel) rebuild() {
+	width := m.viewport.Width
+	if width < 4 {
+		width = 4
+	}
+	wrapped := make([]string, 0, len(m.lines))
+	for _, l := range m.lines {
+		wrapped = append(wrapped, Wrap(l, width))
+	}
+	m.viewport.SetContent(strings.Join(wrapped, "\n"))
 	m.viewport.GotoBottom()
 }
 
@@ -249,9 +272,11 @@ func (m monitorModel) View() string {
 		status = m.styles.Warn.Render("aborting…")
 	}
 	title := m.styles.App.Render(" traust ")
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Left,
-		title,
-		m.styles.Header.Render(fmt.Sprintf(" %s · %s · %s · %s · %s", m.header.Skill, m.header.Harness, ellipsize(m.header.Model, 40), elapsed, status))))
+	head := m.styles.Header.Render(fmt.Sprintf(" %s · %s · %s · %s · %s", m.header.Skill, m.header.Harness, ellipsize(m.header.Model, 40), elapsed, status))
+	// The header must fit one line at any width: clip after assembly rather
+	// than letting the terminal hard-wrap it into the transcript frame.
+	head = Truncate(head, maxInt(m.width-lipgloss.Width(title), 10), "…")
+	b.WriteString(title + head)
 	b.WriteString("\n\n")
 
 	body := m.viewport.View()
@@ -274,10 +299,13 @@ func (m monitorModel) View() string {
 	}
 	var bar string
 	if m.header.BudgetCap > 0 {
-		bar = m.budgetBar(m.tokensOut, m.header.BudgetCap)
+		// The bar yields its cells to the text on narrow terminals.
+		barWidth := clampInt((m.width-lipgloss.Width(usage))/3, 8, 24)
+		bar = m.budgetBar(m.tokensOut, m.header.BudgetCap, barWidth)
 		usage = usage + "  " + bar
 	}
-	b.WriteString(m.styles.StatusBar.Render(usage))
+	// The status bar style adds one cell of padding on each side.
+	b.WriteString(m.styles.StatusBar.Render(Truncate(usage, maxInt(m.width-2, 20), "")))
 	b.WriteString("\n")
 
 	footer := "ctrl+c×2 abort"
@@ -295,8 +323,10 @@ func (m monitorModel) View() string {
 	return b.String()
 }
 
-func (m monitorModel) budgetBar(out, cap int64) string {
-	width := 24
+func (m monitorModel) budgetBar(out, cap int64, width int) string {
+	if width < 4 {
+		width = 4
+	}
 	ratio := 0.0
 	if cap > 0 {
 		ratio = float64(out) / float64(cap)
@@ -367,14 +397,6 @@ func RunMonitor(header MonitorHeader, cancel func(), runFn func(sink runner.Sink
 	}
 }
 
-func truncateLine(s string, n int) string {
-	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", " ")
-	if len(s) > n {
-		return s[:n-1] + "…"
-	}
-	return s
-}
-
 func ellipsize(s string, n int) string {
 	if s == "" {
 		return "(default)"
@@ -383,6 +405,23 @@ func ellipsize(s string, n int) string {
 		return s[:n-1] + "…"
 	}
 	return s
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func human(n int64) string {

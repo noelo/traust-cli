@@ -216,7 +216,7 @@ func printRunSummary(res *runner.RunResult) {
 	if res.ResultText != "" {
 		fmt.Println()
 		fmt.Println(styles.Muted.Render("final message:"))
-		fmt.Println(indent(res.ResultText, "  "))
+		fmt.Println(indent(tui.Wrap(res.ResultText, tui.TerminalWidth()-4), "  "))
 	}
 }
 
@@ -240,35 +240,27 @@ func (plainSink) Progress(msg string) {
 	if strings.Contains(msg, "failed") || strings.Contains(msg, "refused") {
 		style = styles.Err
 	}
-	fmt.Println(style.Render("› " + msg))
+	fmt.Println(tui.Wrap(style.Render("› "+msg), tui.TerminalWidth()))
 }
 
 func (plainSink) Event(ev harness.Event) {
 	styles := theme.Default()
 	switch ev.Kind {
 	case harness.EventText:
-		fmt.Println(truncatePlain(ev.Text))
+		fmt.Println(tui.Wrap(ev.Text, tui.TerminalWidth()))
 	case harness.EventToolCall:
 		fmt.Println(styles.Accent.Render("→ " + ev.Tool))
 	case harness.EventResult:
 		// Result text is printed in the summary.
 	case harness.EventError:
-		fmt.Println(styles.Err.Render("✗ " + ev.Text))
+		fmt.Println(tui.Wrap(styles.Err.Render("✗ "+ev.Text), tui.TerminalWidth()))
 	}
 }
 
 func (plainSink) Raw(line string) {
 	if strings.TrimSpace(line) != "" {
-		fmt.Println(theme.Default().Muted.Render("  " + truncatePlain(line)))
+		fmt.Println(tui.Wrap(theme.Default().Muted.Render("  "+line), tui.TerminalWidth()))
 	}
 }
 
 func (plainSink) Done() {}
-
-func truncatePlain(s string) string {
-	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", " ")
-	if len(s) > 200 {
-		return s[:199] + "…"
-	}
-	return s
-}

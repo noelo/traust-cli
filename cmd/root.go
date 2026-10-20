@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/traust-security/traust-cli/internal/theme"
+	"github.com/traust-security/traust-cli/internal/tui"
 )
 
 // version is set at build time via -ldflags.
@@ -59,10 +60,15 @@ func section(title string) {
 	fmt.Println(theme.Default().Header.Render(title))
 }
 
-// kv prints a label/value line.
+// kv prints a label/value line, wrapping the value to the terminal width.
 func kv(label, value string) {
 	styles := theme.Default()
-	fmt.Printf("  %s %s\n", styles.Label.Render(pad(label)), styles.Value.Render(value))
+	const lead = 18 // "  " + 14-wide label + " "
+	width := tui.TerminalWidth() - lead
+	if width < 20 {
+		width = 20
+	}
+	fmt.Printf("  %s %s\n", styles.Label.Render(pad(label)), tui.Wrap(value, width))
 }
 
 func pad(s string) string {
