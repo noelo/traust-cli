@@ -1,0 +1,4 @@
+# Code owners for the traust-cli repository.
+/cmd/            @traust-security/traust-admins
+/internal/       @traust-security/traust-admins
+/CODEOWNERS      @traust-security/traust-admins

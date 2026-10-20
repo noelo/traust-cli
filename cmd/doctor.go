@@ -1,0 +1,60 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/traust-security/traust-cli/internal/bootstrap"
+	"github.com/traust-security/traust-cli/internal/theme"
+)
+
+var doctorJSON bool
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Verify the install end to end",
+	Long: `Runs the CLI's own checks (state, checkout, venv, engine imports) and
+delegates the deployment-config checks to the harness's install_traust
+--doctor, which exits non-zero on any missing or unparseable config file.`,
+	Run: runDoctor,
+}
+
+func init() {
+	rootCmd.AddCommand(doctorCmd)
+	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "machine-readable output")
+}
+
+func runDoctor(cmd *cobra.Command, args []string) {
+	ctx := context.Background()
+	state, err := loadState()
+	if err != nil {
+		fatalf(1, "%v", err)
+	}
+	report, err := bootstrap.Doctor(ctx, state, nil)
+	if err != nil {
+		fatalf(1, "doctor: %v", err)
+	}
+	if doctorJSON {
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
+	} else {
+		styles := theme.Default()
+		for _, c := range report.Checks {
+			mark := styles.OK.Render("✓")
+			if !c.OK {
+				mark = styles.Err.Render("✗")
+			}
+			fmt.Printf("  %s %s\n", mark, c.Name)
+			if c.Detail != "" {
+				fmt.Println(styles.Muted.Render("      " + c.Detail))
+			}
+		}
+	}
+	if !report.OK {
+		os.Exit(1)
+	}
+}

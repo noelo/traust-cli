@@ -1,0 +1,94 @@
+# traust-cli standalone skill profile.
+#
+# Seeded from traust/docs/standalone-usage.md (the standalone skill table) and
+# traust/docs/model-classes.md (per-skill minimum viable model). Drift is
+# guarded by `traust-cli catalog check`, which compares these names against
+# the SKILL.md frontmatter of a traust checkout.
+#
+# Fields per skill:
+#   role:           model-registry role whose floor applies (empty = none)
+#   min_model_class: documented minimum viable model class
+#   env:            extra environment/infrastructure requirements
+skills:
+  threat-model:
+    role: threat-model
+    min_model_class: mythos
+  secure-code-audit:
+    role: deep-audit
+    min_model_class: mythos
+  secure-rpm-audit:
+    role: deep-audit
+    min_model_class: mythos
+  secure-container-audit:
+    role: deep-audit
+    min_model_class: opus
+    env: [skopeo, syft, grype]
+  cloud-config-audit:
+    role: deep-audit
+    min_model_class: opus
+    env: [checkov]
+  operator-priv-profile:
+    role: deep-audit
+    min_model_class: opus
+    env: ["oc/kubectl (tier 3 only)"]
+  pqc-readiness:
+    role: deep-audit
+    min_model_class: mythos
+    env: [rust toolchain]
+  mine-ledger:
+    min_model_class: opus
+  security-audit-phased:
+    role: deep-audit
+    min_model_class: mythos
+  vuln-scan:
+    role: vuln-scan
+    min_model_class: opus
+  triage:
+    role: triage-verifier
+    min_model_class: mythos
+  countersign:
+    min_model_class: opus
+    env: ["Red Hat LDAP (VPN)"]
+  validate-findings:
+    role: validation-planner
+    min_model_class: mythos
+    env: [ephemeral OCP cluster]
+  validate-browser-finding:
+    role: validation-planner
+    min_model_class: mythos
+    env: [ephemeral OCP cluster, playwright]
+  create-fuzzing:
+    role: fuzz-author
+    min_model_class: opus
+  patch:
+    role: patch-author
+    min_model_class: mythos
+  remediate-finding:
+    role: remediation
+    min_model_class: mythos
+  verify-remediation:
+    role: verification-verdict
+    min_model_class: mythos
+  generate-team-report:
+    role: render-narrate
+    min_model_class: opus
+  track-findings:
+    min_model_class: opus
+  check-harness-docs:
+    min_model_class: sonnet
+  check-licensing:
+    min_model_class: sonnet
+  check-alignment:
+    min_model_class: sonnet
+  check-skill-security:
+    min_model_class: sonnet
+  crypto-analysis:
+    role: deep-audit
+    min_model_class: mythos
+  portfolio-graph:
+    min_model_class: opus
+    env: [gh]
+  dependency-watch:
+    min_model_class: opus
+  impact-analysis:
+    min_model_class: opus
