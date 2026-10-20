@@ -37,3 +37,9 @@ Initial implementation.
   run dies mid-flight.
 - The run summary (artifacts, journal path, harness error, final message)
   prints after the interactive monitor exits, not only in plain mode.
+- Line wrapping adapts to the terminal width everywhere. Monitor transcript
+  lines wrap (ANSI-aware) instead of truncating, and re-flow on resize;
+  the header and status bar clip to fit one line at any width; the report
+  browser rebuilds its table columns and re-renders its markdown at the
+  current width; plain (non-TTY) output and summary lines wrap to the
+  terminal width instead of a fixed 200 characters.
