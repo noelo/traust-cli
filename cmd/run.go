@@ -248,6 +248,8 @@ func (plainSink) Event(ev harness.Event) {
 	switch ev.Kind {
 	case harness.EventText:
 		fmt.Println(tui.Wrap(ev.Text, tui.TerminalWidth()))
+	case harness.EventThinking:
+		fmt.Println(tui.Wrap(styles.Muted.Render("· "+ev.Text), tui.TerminalWidth()))
 	case harness.EventToolCall:
 		fmt.Println(styles.Accent.Render("→ " + ev.Tool))
 	case harness.EventResult:

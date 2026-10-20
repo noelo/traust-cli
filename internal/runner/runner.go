@@ -189,52 +189,23 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	// Launch.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := h.Command(runCtx, &harness.RunSpec{
+	spec := &harness.RunSpec{
 		Prompt: prompt, Model: pf.Model, Cwd: root, Env: state.ChildEnv(),
 		AllowedTools: skill.AllowedTools, MaxTurns: opts.MaxTurns,
 		UnsafeFullPermission: opts.UnsafeFullPermission, OutDir: journal.Dir,
-	})
-	stderrPath := filepath.Join(journal.Dir, "harness-stderr.log")
-	stderrFile, err := os.Create(stderrPath)
-	if err != nil {
-		return nil, fmt.Errorf("create stderr log: %w", err)
-	}
-	defer stderrFile.Close()
-	cmd.Stderr = stderrFile
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s: %w", h.Binary(), err)
 	}
 
-	// Stream loop.
-	streaming := h.Capabilities().StreamJSON
-	var plainOut strings.Builder
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	// handleEvent folds one normalized event into journal, sink, result and
+	// the budget bands — shared by the session and process paths.
 	band := BandWithin
-	for scanner.Scan() {
-		line := scanner.Text()
-		journal.Raw(line)
-		if !streaming {
-			plainOut.WriteString(line)
-			plainOut.WriteString("\n")
-			sink.Raw(line)
-		} else if ev, ok := h.ParseEvent(scanner.Bytes()); ok {
-			journal.Event(string(ev.Kind), ev.Text, ev.Tool, ev.TokensIn, ev.TokensOut, ev.CostUSD, ev.IsError)
-			sink.Event(ev)
-			applyEvent(res, ev)
-			if ev.Kind == harness.EventNeedsInput {
-				res.NeedsInput = true
-				cancel()
-			}
-		} else {
-			sink.Raw(line)
+	handleEvent := func(ev harness.Event) {
+		journal.Event(string(ev.Kind), ev.Text, ev.Tool, ev.TokensIn, ev.TokensOut, ev.CostUSD, ev.IsError)
+		sink.Event(ev)
+		applyEvent(res, ev)
+		if ev.Kind == harness.EventNeedsInput {
+			res.NeedsInput = true
+			cancel()
 		}
-
-		// Budget bands on cumulative output tokens.
 		if policy != nil && res.Usage.TokensOut > 0 {
 			b := policy.BandFor(skill.Name, res.Usage.TokensOut)
 			if b != band {
@@ -248,10 +219,77 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 			}
 		}
 	}
-	scanErr := scanner.Err()
-	waitErr := cmd.Wait()
-	if exitErr, ok := waitErr.(*exec.ExitError); ok {
-		res.HarnessExit = exitErr.ExitCode()
+
+	// Session mode first: harnesses with a managed backend (crush server)
+	// stream structured events, usage and a clean cancel. Falls back to the
+	// one-shot process path when the backend cannot start.
+	var sessErr error
+	sessionDone := false
+	if sr, ok := h.(harness.SessionRunner); ok {
+		sres, err := sr.RunSession(runCtx, spec, handleEvent)
+		switch {
+		case errors.Is(err, harness.ErrServerUnsupported):
+			sink.Progress("note: crush server mode unavailable — falling back to `crush run` (plain text, no live events)")
+		case err != nil:
+			sessErr = err
+			sessionDone = true
+		default:
+			sessionDone = true
+			if sres.Text != "" {
+				res.ResultText = sres.Text
+			}
+			if sres.Err != "" {
+				res.HarnessError = sres.Err
+			}
+			if sres.Cancelled {
+				res.HarnessExit = -1
+			}
+		}
+	}
+
+	var waitErr, scanErr error
+	stderrPath := filepath.Join(journal.Dir, "harness-stderr.log")
+	var plainOut strings.Builder
+	if !sessionDone && sessErr == nil {
+		cmd := h.Command(runCtx, spec)
+		stderrFile, err := os.Create(stderrPath)
+		if err != nil {
+			return nil, fmt.Errorf("create stderr log: %w", err)
+		}
+		cmd.Stderr = stderrFile
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			stderrFile.Close()
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			stderrFile.Close()
+			return nil, fmt.Errorf("start %s: %w", h.Binary(), err)
+		}
+
+		// Stream loop.
+		streaming := h.Capabilities().StreamJSON
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			journal.Raw(line)
+			if !streaming {
+				plainOut.WriteString(line)
+				plainOut.WriteString("\n")
+				sink.Raw(line)
+			} else if ev, ok := h.ParseEvent(scanner.Bytes()); ok {
+				handleEvent(ev)
+			} else {
+				sink.Raw(line)
+			}
+		}
+		scanErr = scanner.Err()
+		waitErr = cmd.Wait()
+		stderrFile.Close()
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			res.HarnessExit = exitErr.ExitCode()
+		}
 	}
 
 	switch {
@@ -260,11 +298,18 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		sink.Progress(fmt.Sprintf("budget refuse band hit (%d output tokens, cap %d) — harness terminated; re-run with --budget-override \"<reason>\" if this is expected", res.Usage.TokensOut, res.BudgetCap))
 	case res.NeedsInput:
 		res.ExitCode = ExitNeedsInput
-		sink.Progress("the skill asked for interactive input, which a headless run cannot provide — run it interactively in your harness and answer its questions, then re-run")
+		sink.Progress("the skill asked for interactive input or a permission grant, which a headless run cannot provide — run it interactively in your harness and answer its questions, then re-run")
 	case ctx.Err() != nil:
 		res.Aborted = true
 		res.ExitCode = ExitError
 		sink.Progress("run aborted")
+	case sessErr != nil:
+		res.ExitCode = ExitError
+		res.HarnessError = sessErr.Error()
+		sink.Progress("harness session failed: " + res.HarnessError)
+	case res.HarnessError != "":
+		res.ExitCode = ExitError
+		sink.Progress("harness run failed: " + res.HarnessError)
 	case waitErr != nil:
 		res.ExitCode = ExitError
 		res.HarnessError = waitErr.Error()
@@ -277,7 +322,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		sink.Progress(fmt.Sprintf("stream read error: %v", scanErr))
 	}
 
-	if !streaming && res.ResultText == "" {
+	if !sessionDone && !h.Capabilities().StreamJSON && res.ResultText == "" {
 		res.ResultText = strings.TrimRight(plainOut.String(), "\n")
 	}
 

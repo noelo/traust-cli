@@ -207,8 +207,14 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 	switch ev.Kind {
 	case harness.EventText:
 		m.pushLine(ev.Text)
+	case harness.EventThinking:
+		m.pushLine(m.styles.Muted.Italic(true).Render("· thinking: " + ev.Text))
 	case harness.EventToolCall:
-		m.pushLine(m.styles.Accent.Render("→ " + ev.Tool))
+		line := "→ " + ev.Tool
+		if ev.Text != "" {
+			line += "  " + ev.Text
+		}
+		m.pushLine(m.styles.Accent.Render(line))
 	case harness.EventUsage:
 		m.tokensIn, m.tokensOut = ev.TokensIn, ev.TokensOut
 	case harness.EventResult:
@@ -222,7 +228,11 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 		m.pushLine(m.styles.Err.Render("✗ " + ev.Text))
 	case harness.EventNeedsInput:
 		m.failed = true
-		m.pushLine(m.styles.Err.Render("✗ the skill asked for interactive input — run it interactively in your harness"))
+		what := ev.Tool
+		if what == "" {
+			what = ev.Text
+		}
+		m.pushLine(m.styles.Err.Render("✗ needs input that a headless run cannot provide: " + what))
 	}
 }
 
@@ -231,9 +241,7 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 // complete at any terminal size.
 func (m *monitorModel) pushLine(line string) {
 	line = strings.ReplaceAll(line, "\r", "")
-	for _, l := range strings.Split(line, "\n") {
-		m.lines = append(m.lines, l)
-	}
+	m.lines = append(m.lines, strings.Split(line, "\n")...)
 	if len(m.lines) > 1000 {
 		m.lines = m.lines[len(m.lines)-1000:]
 	}

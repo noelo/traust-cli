@@ -22,14 +22,16 @@ const (
 	EventText EventKind = "text"
 	// EventToolCall is a tool invocation by the agent.
 	EventToolCall EventKind = "tool_call"
+	// EventThinking is a completed reasoning/thinking block.
+	EventThinking EventKind = "thinking"
 	// EventUsage is a cumulative token-usage update.
 	EventUsage EventKind = "usage"
 	// EventResult is the final result of the run.
 	EventResult EventKind = "result"
 	// EventError is a stream-reported error.
 	EventError EventKind = "error"
-	// EventNeedsInput means the agent asked the user a question — impossible
-	// to satisfy headlessly (exit code 2).
+	// EventNeedsInput means the agent asked the user a question or raised a
+	// permission request — impossible to satisfy headlessly (exit code 2).
 	EventNeedsInput EventKind = "needs_input"
 )
 
@@ -79,6 +81,32 @@ type RunSpec struct {
 	// OutDir is the run journal directory (for harnesses that write their
 	// final message to a file).
 	OutDir string
+}
+
+// ErrServerUnsupported is returned by a SessionRunner whose managed backend
+// cannot start (missing subcommand, old version). The runner falls back to
+// the one-shot process path when it sees this.
+var ErrServerUnsupported = errors.New("harness server mode unsupported")
+
+// SessionResult is the terminal outcome of a session-based run. Err and
+// Cancelled describe the RUN's fate, not the transport: transport failures
+// go into the error return of RunSession.
+type SessionResult struct {
+	Text      string
+	Err       string
+	Cancelled bool
+}
+
+// SessionRunner is implemented by harnesses that execute through a managed
+// session backend (crush's `crush server`: workspace, SSE event stream,
+// cancel endpoint) instead of a one-shot process. The runner feeds every
+// normalized event to emit; RunSession must honor context cancellation by
+// cancelling the remote run and returning promptly.
+type SessionRunner interface {
+	// RunSession executes spec.Prompt and emits normalized events until the
+	// run terminates. Returns ErrServerUnsupported when the backend cannot
+	// start, so the runner can fall back to the process path.
+	RunSession(ctx context.Context, spec *RunSpec, emit func(Event)) (SessionResult, error)
 }
 
 // Harness is one agent harness adapter.

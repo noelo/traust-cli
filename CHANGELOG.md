@@ -43,3 +43,10 @@ Initial implementation.
   browser rebuilds its table columns and re-renders its markdown at the
   current width; plain (non-TTY) output and summary lines wrap to the
   terminal width instead of a fixed 200 characters.
+- crush runs now execute through `crush server` in client mode: thinking,
+  tool calls and cumulative token usage stream live into the monitor
+  (run_complete is correlated by RunID), budget bands and spend
+  declarations work on real usage, and aborts cancel the remote session
+  through the cancel endpoint before teardown. Permission and question
+  requests cannot be satisfied unattended and fail closed (exit 2) naming
+  the tool. Runs fall back to `crush run` when the server cannot start.

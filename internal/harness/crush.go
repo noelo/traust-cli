@@ -39,9 +39,9 @@ func (c *Crush) Command(ctx context.Context, spec *RunSpec) *exec.Cmd {
 
 func (c *Crush) Notes() []string {
 	return []string{
-		"crush run emits plain text, not a structured stream: tool calls are not distinguished live",
-		"token usage is not reported by crush run: the spend declaration is skipped",
-		"headless permission posture comes from your crushrc `permissions allow` entries — pre-allow the tools the skills need",
+		"running through crush server mode: thinking, tool calls and token usage stream live into the monitor",
+		"permission and question requests cannot be answered unattended: the run fails closed (exit 2) naming the tool — pre-allow the tools skills need in a .crush/crushrc at the harness root (`permissions allow`)",
+		"if the server cannot start, the run falls back to `crush run` (plain text, no live events, no usage)",
 	}
 }
 
