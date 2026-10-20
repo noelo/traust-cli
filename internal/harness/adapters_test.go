@@ -135,6 +135,26 @@ func TestBinaryEnvOverride(t *testing.T) {
 	}
 }
 
+func TestMatchCrushModel(t *testing.T) {
+	listing := "PriceTag/rits/zai-org/glm-5-3\nPriceTag/Inferact/Qwen3.8-Flash-Next\nanthropic/claude-mythos-5\n"
+	if err := matchCrushModel(listing, "claude-mythos-5"); err != nil {
+		t.Errorf("exact provider-prefixed match should pass: %v", err)
+	}
+	if err := matchCrushModel(listing, "rits/zai-org/glm-5-3"); err != nil {
+		t.Errorf("exact match should pass: %v", err)
+	}
+	if err := matchCrushModel(listing, "glm-5-3"); err != nil {
+		t.Errorf("suffix match should pass: %v", err)
+	}
+	if err := matchCrushModel(listing, "claude-mythos-6"); err == nil {
+		t.Error("unknown model should fail")
+	}
+	// A suffix must not match mid-segment: glm-5-30 is a different model.
+	if err := matchCrushModel(listing, "glm-5-30"); err == nil {
+		t.Error("mid-segment suffix should not match")
+	}
+}
+
 func contains(list []string, want string) bool {
 	for _, v := range list {
 		if v == want {

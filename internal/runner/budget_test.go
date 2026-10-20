@@ -71,6 +71,36 @@ per_run_defaults:
 	}
 }
 
+// TestLoadPolicySequenceBands covers the shape the harness actually ships:
+// bands as a list of {at, action} entries.
+func TestLoadPolicySequenceBands(t *testing.T) {
+	dir := writePolicy(t, `
+budget_policy:
+  enforcement: enforced
+  units: output_tokens
+  per_run_defaults:
+    secure-code-audit: 2_500_000
+    default: 1_000_000
+  bands:
+    - at: 1.5
+      action: warn
+    - at: 2.0
+      action: degrade
+    - at: 3.0
+      action: refuse
+`)
+	p, err := LoadPolicy(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Warn != 1.5 || p.Degrade != 2.0 || p.Refuse != 3.0 {
+		t.Errorf("sequence bands = %v/%v/%v", p.Warn, p.Degrade, p.Refuse)
+	}
+	if got := p.CapFor("secure-code-audit"); got != 2_500_000 {
+		t.Errorf("cap = %d", got)
+	}
+}
+
 func TestBandFor(t *testing.T) {
 	p := &Policy{DefaultCap: 1000, Warn: 1.5, Degrade: 2.0, Refuse: 3.0}
 	cases := []struct {

@@ -174,7 +174,9 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 	if runFlags.json {
 		out, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(out))
-	} else if !interactive {
+	} else {
+		// The summary prints after the monitor too: artifacts, journal
+		// location and the failure reason must not vanish with the TUI.
 		printRunSummary(res)
 	}
 	os.Exit(res.ExitCode)
@@ -191,6 +193,11 @@ func printRunSummary(res *runner.RunResult) {
 	}
 	if res.BudgetCap > 0 {
 		kv("budget", fmt.Sprintf("%s band · cap %d output tokens", res.BudgetBand, res.BudgetCap))
+	}
+	if res.HarnessError != "" {
+		fmt.Println()
+		fmt.Println(styles.Err.Render("harness error:"))
+		fmt.Println(indent(res.HarnessError, "  "))
 	}
 	if len(res.Artifacts) > 0 {
 		fmt.Println()
