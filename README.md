@@ -53,7 +53,7 @@ Antigravity (agy) is deferred: it has no headless execution path.
 | codex | `codex exec - --json --output-last-message` | ✓ | ✓ | `workspace-write` sandbox, approvals never |
 | pi | `pi --mode json` | ✓ | ✓ | tool grants mapped onto pi's builtin tools |
 | opencode | `opencode run --format json --auto` | partial | — | `--auto` |
-| crush | `crush run` (stdin) | text only | — | your crushrc `permissions allow` entries |
+| crush | `crush server` (client mode): workspace + SSE events, clean cancel; falls back to `crush run` | ✓ live | ✓ | workspace permission level; unanswered permission/question requests fail closed (exit 2) |
 | goose | experimental (`TRAUST_CLI_GOOSE_ARGS` overrides the template) | — | — | goose's own configuration |
 
 Every adapter prints its honest caveats before a run. `--unsafe-full-permission`
