@@ -87,3 +87,8 @@ Initial implementation.
 - The monitor now shows tool results (crush tool_result parts, truncated),
   which are the bulk of a run's output; journal raw lines no longer
   duplicate parsed events, so attach replays render once.
+- Fixed the detach hang: the attach monitor's relay goroutine waited for
+  the journal tailer to finish, but a detached run keeps tailing — so the
+  process (and the terminal) stayed open until a second ctrl+c killed it.
+  The relay now abandons the feed the moment the monitor exits; one ctrl+c
+  detaches cleanly, printing the re-attach hint and exiting 0.

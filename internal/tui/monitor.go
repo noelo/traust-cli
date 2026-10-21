@@ -355,19 +355,36 @@ func (m monitorModel) budgetBar(out, cap int64, width int) string {
 // quits the monitor without touching the run; cancelling (x twice) invokes
 // stop. The returned bool reports whether the run completed while attached.
 func Attach(header MonitorHeader, follow <-chan MonitorItem, stop func()) (bool, error) {
-	m := newMonitor(header, stop, 80, 24)
-	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	return attachProgram(header, follow, stop, tea.WithAltScreen(), tea.WithMouseCellMotion())
+}
 
-	relayDone := make(chan struct{})
+// attachProgram is Attach with injectable program options (tests feed a
+// pipe as input and discard output).
+func attachProgram(header MonitorHeader, follow <-chan MonitorItem, stop func(), opts ...tea.ProgramOption) (bool, error) {
+	m := newMonitor(header, stop, 80, 24)
+	prog := tea.NewProgram(m, opts...)
+
+	// The relay must ABANDON the feed when the program exits, not wait for
+	// it to close: detaching means the run — and its journal tailer — keep
+	// going. Waiting here held the process (and the terminal) open until a
+	// second ctrl+c killed it.
+	progDone := make(chan struct{})
 	go func() {
-		defer close(relayDone)
-		for it := range follow {
-			prog.Send(it)
+		for {
+			select {
+			case it, ok := <-follow:
+				if !ok {
+					return
+				}
+				prog.Send(it)
+			case <-progDone:
+				return
+			}
 		}
 	}()
 
 	out, err := prog.Run()
-	<-relayDone
+	close(progDone)
 	if err != nil {
 		return false, err
 	}

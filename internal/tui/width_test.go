@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -10,6 +12,32 @@ import (
 
 	"github.com/traust-security/traust-cli/internal/views"
 )
+
+// TestAttachDetachReturnsWhileFeedOpen is the regression test for the
+// detach hang: the monitor must exit when the user quits, even though the
+// journal tailer keeps the feed channel open (the run continues).
+func TestAttachDetachReturnsWhileFeedOpen(t *testing.T) {
+	follow := make(chan MonitorItem, 8) // never closed — the run is still going
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := attachProgram(MonitorHeader{Skill: "s", Harness: "crush"},
+			follow, nil,
+			tea.WithInput(strings.NewReader("\x03")), // ctrl+c: detach
+			tea.WithOutput(io.Discard),
+			tea.WithoutSignalHandler())
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("attach: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("attach did not return after ctrl+c while the feed stayed open — detach hang regression")
+	}
+}
 
 func TestWrapRespectsWidth(t *testing.T) {
 	cases := []struct {
