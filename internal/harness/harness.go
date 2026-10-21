@@ -22,6 +22,8 @@ const (
 	EventText EventKind = "text"
 	// EventToolCall is a tool invocation by the agent.
 	EventToolCall EventKind = "tool_call"
+	// EventToolResult is a completed tool invocation's (truncated) output.
+	EventToolResult EventKind = "tool_result"
 	// EventThinking is a completed reasoning/thinking block.
 	EventThinking EventKind = "thinking"
 	// EventUsage is a cumulative token-usage update.

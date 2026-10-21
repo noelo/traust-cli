@@ -71,6 +71,10 @@ type Options struct {
 	BudgetOverrideReason string
 	StrictValidation     bool
 	DeclareSpend         bool
+	// RunID, when set, overrides the generated run id — the background
+	// launcher creates the run directory before spawning the worker, so it
+	// owns the id.
+	RunID string
 }
 
 // Usage is the accumulated token usage of a run.
@@ -115,7 +119,10 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		return nil, errors.New("runner: state, api, harness and skill are required")
 	}
 
-	runID := time.Now().Format("20060102-150405") + "-" + skill.Name
+	runID := opts.RunID
+	if runID == "" {
+		runID = time.Now().Format("20060102-150405") + "-" + skill.Name
+	}
 	res := &RunResult{RunID: runID, Skill: skill.Name, Harness: h.ID(), ExitCode: ExitOK}
 
 	// Full-permission consent: the per-run flag OR the init-time consent
@@ -281,14 +288,18 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			journal.Raw(line)
 			if !streaming {
+				journal.Raw(line)
 				plainOut.WriteString(line)
 				plainOut.WriteString("\n")
 				sink.Raw(line)
 			} else if ev, ok := h.ParseEvent(scanner.Bytes()); ok {
 				handleEvent(ev)
 			} else {
+				// Unparsed stream lines are journaled raw so attach replays
+				// show exactly what the harness emitted; parsed lines are
+				// recorded once, as events.
+				journal.Raw(line)
 				sink.Raw(line)
 			}
 		}

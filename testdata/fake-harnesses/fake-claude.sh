@@ -20,6 +20,11 @@ if [ "${FAKE_CLAUDE_MODE:-}" = "fail" ]; then
   exit 3
 fi
 
+if [ "${FAKE_CLAUDE_MODE:-}" = "slow" ]; then
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
+  sleep 30
+fi
+
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"starting audit"}]}}'
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{}}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"audit complete","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.42}'

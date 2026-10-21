@@ -166,11 +166,16 @@ func happyScript(w io.Writer, r *http.Request, sid, runID string) {
 		`{"type":"reasoning","data":{"thinking":"pondering the target","finished_at":1792525268}}`)
 	sse(w, `{"type":"message","payload":{"type":"updated","payload":{"id":"m1","role":"assistant","parts":[%s,%s]}}}`,
 		`{"type":"reasoning","data":{"thinking":"pondering the target","finished_at":1792525268}}`,
-		`{"type":"tool_call","data":{"name":"bash","input":"{\"command\":\"git clone\"}"}}`)
-	sse(w, `{"type":"session","payload":{"type":"updated","payload":{"id":"%s","prompt_tokens":100,"completion_tokens":50,"cost":0.42}}}`, sid)
+		`{"type":"tool_call","data":{"id":"c1","name":"bash","input":"{\"command\":\"git clone\"}"}}`)
 	sse(w, `{"type":"message","payload":{"type":"updated","payload":{"id":"m1","role":"assistant","parts":[%s,%s,%s]}}}`,
 		`{"type":"reasoning","data":{"thinking":"pondering the target","finished_at":1792525268}}`,
-		`{"type":"tool_call","data":{"name":"bash","input":"{\"command\":\"git clone\"}"}}`,
+		`{"type":"tool_call","data":{"id":"c1","name":"bash","input":"{\"command\":\"git clone\"}"}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"c1","name":"bash","content":"Cloning into 'repo'...\ndone\nline3\nline4\nline5\nline6\nline7","is_error":false}}`)
+	sse(w, `{"type":"session","payload":{"type":"updated","payload":{"id":"%s","prompt_tokens":100,"completion_tokens":50,"cost":0.42}}}`, sid)
+	sse(w, `{"type":"message","payload":{"type":"updated","payload":{"id":"m1","role":"assistant","parts":[%s,%s,%s,%s]}}}`,
+		`{"type":"reasoning","data":{"thinking":"pondering the target","finished_at":1792525268}}`,
+		`{"type":"tool_call","data":{"id":"c1","name":"bash","input":"{\"command\":\"git clone\"}"}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"c1","name":"bash","content":"Cloning into 'repo'...\ndone\nline3\nline4\nline5\nline6\nline7","is_error":false}}`,
 		`{"type":"text","data":{"text":"audit complete"}}`)
 	sse(w, `{"type":"run_complete","payload":{"type":"updated","payload":{"session_id":"%s","run_id":"%s","message_id":"m1","text":"audit complete"}}}`, sid, runID)
 }
@@ -189,7 +194,7 @@ func TestCrushServeSessionRun(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 
-	var sawText, sawThinking, sawTool, sawUsage bool
+	var sawText, sawThinking, sawTool, sawUsage, sawToolResult bool
 	for _, ev := range events {
 		switch ev.Kind {
 		case EventText:
@@ -198,12 +203,18 @@ func TestCrushServeSessionRun(t *testing.T) {
 			sawThinking = ev.Text == "pondering the target"
 		case EventToolCall:
 			sawTool = ev.Tool == "bash" && strings.Contains(ev.Text, "git clone")
+		case EventToolResult:
+			sawToolResult = ev.Tool == "bash" &&
+				strings.Contains(ev.Text, "Cloning into 'repo'...") &&
+				strings.Count(ev.Text, "\n") == 6 && // 6 lines + cut marker
+				strings.HasSuffix(ev.Text, "…") &&
+				!strings.Contains(ev.Text, "line7") // truncation at 6 lines
 		case EventUsage:
 			sawUsage = ev.TokensIn == 100 && ev.TokensOut == 50 && ev.CostUSD == 0.42
 		}
 	}
-	if !sawText || !sawThinking || !sawTool || !sawUsage {
-		t.Errorf("events incomplete: text=%v thinking=%v tool=%v usage=%v (%d events)", sawText, sawThinking, sawTool, sawUsage, len(events))
+	if !sawText || !sawThinking || !sawTool || !sawUsage || !sawToolResult {
+		t.Errorf("events incomplete: text=%v thinking=%v tool=%v usage=%v result=%v (%d events)", sawText, sawThinking, sawTool, sawUsage, sawToolResult, len(events))
 	}
 	if len(f.cancelCalls) != 0 {
 		t.Errorf("unexpected cancel calls: %v", f.cancelCalls)

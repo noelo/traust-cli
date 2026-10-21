@@ -5,7 +5,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -13,7 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/traust-security/traust-cli/internal/harness"
-	"github.com/traust-security/traust-cli/internal/runner"
 	"github.com/traust-security/traust-cli/internal/theme"
 )
 
@@ -23,73 +21,40 @@ type MonitorHeader struct {
 	Harness   string
 	Model     string
 	BudgetCap int64
+	// RunID is shown short in the header (attach context).
+	RunID string
+	// StartedAt, when non-zero, anchors the elapsed clock (attach replays
+	// runs that may have started long before the monitor opened).
+	StartedAt time.Time
 }
 
-type monitorItemKind int
+// ItemKind classifies a monitor feed item.
+type ItemKind int
 
 const (
-	itemEvent monitorItemKind = iota
-	itemRaw
-	itemProgress
-	itemDone
+	// ItemEvent is one normalized harness event.
+	ItemEvent ItemKind = iota
+	// ItemRaw is one unparsed harness output line.
+	ItemRaw
+	// ItemProgress is a run-stage message.
+	ItemProgress
+	// ItemDone marks the run as complete.
+	ItemDone
 )
 
-type monitorItem struct {
-	kind monitorItemKind
-	ev   harness.Event
-	text string
-}
-
-// monitorSink forwards run updates into the monitor's channel. Sends are
-// non-blocking (the journal keeps everything; the UI may drop under
-// backpressure) and guarded against a close, so the runner goroutine can
-// never panic or deadlock when the program exits before the run does.
-type monitorSink struct {
-	ch     chan monitorItem
-	mu     sync.Mutex
-	closed bool
-	once   sync.Once
-}
-
-func (s *monitorSink) send(it monitorItem) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	select {
-	case s.ch <- it:
-	default: // UI backpressure: drop; the journal keeps everything.
-	}
-}
-
-func (s *monitorSink) Progress(msg string) {
-	s.send(monitorItem{kind: itemProgress, text: msg})
-}
-func (s *monitorSink) Event(ev harness.Event) {
-	s.send(monitorItem{kind: itemEvent, ev: ev, text: ev.Text})
-}
-func (s *monitorSink) Raw(line string) {
-	s.send(monitorItem{kind: itemRaw, text: line})
-}
-func (s *monitorSink) Done() { s.Close() }
-
-// Close tears the channel down exactly once, whether the runner finished
-// cleanly or the program exited first.
-func (s *monitorSink) Close() {
-	s.once.Do(func() {
-		s.mu.Lock()
-		s.closed = true
-		close(s.ch)
-		s.mu.Unlock()
-	})
+// MonitorItem is one unit of monitor input. Live runs and journal replays
+// both produce them.
+type MonitorItem struct {
+	Kind  ItemKind
+	Event harness.Event
+	Text  string
 }
 
 type tickMsg time.Time
 
 type monitorModel struct {
 	header              MonitorHeader
-	cancel              func()
+	stop                func()
 	styles              theme.Styles
 	viewport            viewport.Model
 	lines               []string
@@ -98,12 +63,12 @@ type monitorModel struct {
 	band                string
 	done                bool
 	failed              bool
-	aborting            bool
-	// abortArmed is the ctrl+c confirmation state: the first press asks,
-	// the second (within armWindow) actually aborts. A single stray ctrl+c
-	// must not kill a 10-minute audit that merely looks quiet.
-	abortArmed    bool
-	abortArmedAt  time.Time
+	cancelling          bool
+	// cancelArmed is the x-key confirmation state: the first press asks,
+	// the second (within armWindow) cancels the run. Cancelling a scan is
+	// destructive and must never happen on a stray keystroke.
+	cancelArmed   bool
+	cancelArmedAt time.Time
 	lastOutput    time.Time
 	started       time.Time
 	width, height int
@@ -111,11 +76,15 @@ type monitorModel struct {
 
 const armWindow = 6 * time.Second
 
-func newMonitor(header MonitorHeader, cancel func(), width, height int) monitorModel {
+func newMonitor(header MonitorHeader, stop func(), width, height int) monitorModel {
 	vp := viewport.New(width-2, height-8)
+	started := header.StartedAt
+	if started.IsZero() {
+		started = time.Now()
+	}
 	return monitorModel{
-		header: header, cancel: cancel, styles: theme.Default(),
-		viewport: vp, band: "within", started: time.Now(),
+		header: header, stop: stop, styles: theme.Default(),
+		viewport: vp, band: "within", started: started,
 		width: width, height: height,
 	}
 }
@@ -127,38 +96,38 @@ func (m monitorModel) Init() tea.Cmd {
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
-		// Disarm the abort confirmation when the window passes.
-		if m.abortArmed && time.Since(m.abortArmedAt) > armWindow {
-			m.abortArmed = false
+		// Disarm the cancel confirmation when the window passes.
+		if m.cancelArmed && time.Since(m.cancelArmedAt) > armWindow {
+			m.cancelArmed = false
 		}
 		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
-	case monitorItem:
+	case MonitorItem:
 		m.lastOutput = time.Now()
-		switch msg.kind {
-		case itemEvent:
-			m.applyEvent(msg.ev)
-		case itemRaw:
-			m.pushLine(m.styles.Muted.Render("  " + msg.text))
-		case itemProgress:
+		switch msg.Kind {
+		case ItemEvent:
+			m.applyEvent(msg.Event)
+		case ItemRaw:
+			m.pushLine(m.styles.Muted.Render("  " + msg.Text))
+		case ItemProgress:
 			style := m.styles.Accent
-			if strings.HasPrefix(msg.text, "warning:") || strings.HasPrefix(msg.text, "note:") {
+			if strings.HasPrefix(msg.Text, "warning:") || strings.HasPrefix(msg.Text, "note:") {
 				style = m.styles.Warn
 			}
-			if strings.Contains(msg.text, "failed") || strings.Contains(msg.text, "refused") {
+			if strings.Contains(msg.Text, "failed") || strings.Contains(msg.Text, "refused") {
 				style = m.styles.Err
 				m.failed = true
 			}
-			if strings.Contains(msg.text, "is not runnable") {
+			if strings.Contains(msg.Text, "is not runnable") {
 				style = m.styles.Err
 				m.failed = true
 			}
-			if rest, ok := strings.CutPrefix(msg.text, "budget band "); ok {
+			if rest, ok := strings.CutPrefix(msg.Text, "budget band "); ok {
 				if fields := strings.Fields(rest); len(fields) > 0 {
 					m.band = fields[0]
 				}
 			}
-			m.pushLine(style.Render("› " + msg.text))
-		case itemDone:
+			m.pushLine(style.Render("› " + msg.Text))
+		case ItemDone:
 			m.done = true
 			m.pushLine(m.styles.Muted.Render("— run complete —"))
 		}
@@ -171,31 +140,30 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c":
+		case "ctrl+c", "q", "d", "esc":
+			// Detach: the run keeps going in its own process. This is the
+			// common case and must be instant and non-destructive.
+			return m, tea.Quit
+		case "enter":
 			if m.done {
 				return m, tea.Quit
 			}
-			if m.aborting {
-				// Second press while already aborting: leave the view; the
-				// runner keeps tearing down in the background.
+		case "x":
+			if m.done {
 				return m, tea.Quit
 			}
-			if m.abortArmed {
-				m.aborting = true
-				m.pushLine(m.styles.Warn.Render("› aborting — terminating the harness…"))
-				if m.cancel != nil {
-					m.cancel()
+			if m.cancelArmed {
+				m.cancelling = true
+				m.pushLine(m.styles.Warn.Render("› cancelling — stopping the run…"))
+				if m.stop != nil {
+					m.stop()
 				}
 				return m, nil
 			}
-			m.abortArmed = true
-			m.abortArmedAt = time.Now()
-			m.pushLine(m.styles.Warn.Render("› press ctrl+c again to abort the run"))
+			m.cancelArmed = true
+			m.cancelArmedAt = time.Now()
+			m.pushLine(m.styles.Warn.Render("› press x again to cancel the run (ctrl+c detaches without cancelling)"))
 			return m, nil
-		case "q", "enter", "esc":
-			if m.done {
-				return m, tea.Quit
-			}
 		}
 	}
 	var cmd tea.Cmd
@@ -215,6 +183,19 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 			line += "  " + ev.Text
 		}
 		m.pushLine(m.styles.Accent.Render(line))
+	case harness.EventToolResult:
+		// The tool's actual output, already truncated by the adapter.
+		if ev.Text == "" {
+			return
+		}
+		style := m.styles.Muted
+		prefix := "  │ "
+		if ev.IsError {
+			style = m.styles.Warn
+		}
+		for _, l := range strings.Split(ev.Text, "\n") {
+			m.pushLine(style.Render(prefix + l))
+		}
 	case harness.EventUsage:
 		m.tokensIn, m.tokensOut = ev.TokensIn, ev.TokensOut
 	case harness.EventResult:
@@ -276,11 +257,19 @@ func (m monitorModel) View() string {
 		} else {
 			status = m.styles.OK.Render("finished")
 		}
-	} else if m.aborting {
-		status = m.styles.Warn.Render("aborting…")
+	} else if m.cancelling {
+		status = m.styles.Warn.Render("cancelling…")
 	}
 	title := m.styles.App.Render(" traust ")
-	head := m.styles.Header.Render(fmt.Sprintf(" %s · %s · %s · %s · %s", m.header.Skill, m.header.Harness, ellipsize(m.header.Model, 40), elapsed, status))
+	shortID := ""
+	if m.header.RunID != "" {
+		parts := strings.Split(m.header.RunID, "-")
+		last := parts[len(parts)-1]
+		if len(parts) >= 4 && len(last) == 4 {
+			shortID = " " + last + " "
+		}
+	}
+	head := m.styles.Header.Render(fmt.Sprintf("%s %s · %s · %s · %s · %s", shortID, m.header.Skill, m.header.Harness, ellipsize(m.header.Model, 40), elapsed, status))
 	// The header must fit one line at any width: clip after assembly rather
 	// than letting the terminal hard-wrap it into the transcript frame.
 	head = Truncate(head, maxInt(m.width-lipgloss.Width(title), 10), "…")
@@ -294,8 +283,7 @@ func (m monitorModel) View() string {
 	b.WriteString("\n")
 
 	// Status bar: usage + budget bar + output age. The age indicator is the
-	// answer to "is it stuck?": quiet harnesses (crush run emits one large
-	// chunk every few minutes) look frozen without it.
+	// answer to "is it stuck?": quiet harnesses look frozen without it.
 	usage := fmt.Sprintf("in %s · out %s", human(m.tokensIn), human(m.tokensOut))
 	if m.cost > 0 {
 		usage += fmt.Sprintf(" · $%.2f", m.cost)
@@ -316,12 +304,15 @@ func (m monitorModel) View() string {
 	b.WriteString(m.styles.StatusBar.Render(Truncate(usage, maxInt(m.width-2, 20), "")))
 	b.WriteString("\n")
 
-	footer := "ctrl+c×2 abort"
-	if m.abortArmed && !m.aborting {
-		footer = "press ctrl+c again to abort"
+	footer := "ctrl+c detach (run continues) · x×2 cancel"
+	if m.width < 46 {
+		footer = "ctrl+c detach · x cancel"
 	}
-	if m.aborting {
-		footer = "aborting… (ctrl+c again to leave)"
+	if m.cancelArmed && !m.cancelling {
+		footer = "press x again to cancel · ctrl+c detaches"
+	}
+	if m.cancelling {
+		footer = "cancelling…"
 	}
 	if m.done {
 		footer = "q quit · journal written"
@@ -358,51 +349,33 @@ func (m monitorModel) budgetBar(out, cap int64, width int) string {
 	return fmt.Sprintf("budget %s/%s [%s]", human(out), human(cap), bar)
 }
 
-// RunMonitor runs the tea program while runFn executes the pipeline with a
-// sink wired to the monitor. cancel is invoked when the user confirms an
-// abort. It only returns after runFn has finished (or timed out), so the
-// caller can rely on the run result being complete — force-quitting the
-// view tears the harness down first.
-func RunMonitor(header MonitorHeader, cancel func(), runFn func(sink runner.Sink) error) error {
-	items := make(chan monitorItem, 128)
-	sink := &monitorSink{ch: items}
+// Attach runs the monitor over a feed of monitor items. It is used both for
+// live runs (a producer tailing the worker's journal) and finished runs
+// (replay followed by an immediately closed feed). Detaching (ctrl+c, q, d)
+// quits the monitor without touching the run; cancelling (x twice) invokes
+// stop. The returned bool reports whether the run completed while attached.
+func Attach(header MonitorHeader, follow <-chan MonitorItem, stop func()) (bool, error) {
+	m := newMonitor(header, stop, 80, 24)
+	prog := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	prog := tea.NewProgram(newMonitor(header, cancel, 80, 24),
-		tea.WithAltScreen(), tea.WithMouseCellMotion())
-
-	runDone := make(chan error, 1)
-	go func() {
-		err := runFn(sink)
-		sink.Close() // terminate the relay even on early error paths
-		runDone <- err
-	}()
 	relayDone := make(chan struct{})
 	go func() {
 		defer close(relayDone)
-		for it := range items {
+		for it := range follow {
 			prog.Send(it)
 		}
-		prog.Send(monitorItem{kind: itemDone})
 	}()
 
-	_, err := prog.Run()
-	// The program is gone: make sure a still-running harness is torn down,
-	// then join the runner so the result is complete before returning.
-	if cancel != nil {
-		cancel()
+	out, err := prog.Run()
+	<-relayDone
+	if err != nil {
+		return false, err
 	}
-	select {
-	case runErr := <-runDone:
-		if err != nil {
-			return err
-		}
-		return runErr
-	case <-time.After(30 * time.Second):
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("run did not shut down within 30s of the monitor exiting")
+	finished := false
+	if fm, ok := out.(monitorModel); ok {
+		finished = fm.done
 	}
+	return finished, nil
 }
 
 func ellipsize(s string, n int) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -28,6 +29,7 @@ var runFlags struct {
 	json                 bool
 	strictValidation     bool
 	noMonitor            bool
+	detach               bool
 }
 
 var runCmd = &cobra.Command{
@@ -54,7 +56,8 @@ func init() {
 	runCmd.Flags().StringVar(&runFlags.budgetOverride, "budget-override", "", "reason to proceed past the budget refuse band (recorded)")
 	runCmd.Flags().BoolVar(&runFlags.json, "json", false, "machine-readable result summary on stdout")
 	runCmd.Flags().BoolVar(&runFlags.strictValidation, "strict", false, "strict schema validation of artifacts")
-	runCmd.Flags().BoolVar(&runFlags.noMonitor, "no-monitor", false, "plain output even on a TTY")
+	runCmd.Flags().BoolVar(&runFlags.noMonitor, "no-monitor", false, "plain output even on a TTY (synchronous, in-process)")
+	runCmd.Flags().BoolVarP(&runFlags.detach, "detach", "d", false, "start in the background without attaching (interactive runs attach by default)")
 }
 
 func runRun(cmd *cobra.Command, args []string) {
@@ -126,8 +129,6 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		fatalf(1, "%s binary %q not found — install it or pick another harness with --harness", h.DisplayName(), h.Binary())
 	}
 
-	client := api.NewPythonCLI(state.VenvPython(), state.ChildEnv(), state.TraustRepo())
-
 	// Full-permission mode: explicit per-run flag, or the init-time consent
 	// recorded in state. The harness's skills require unattended tool use.
 	unsafeFullPermission := runFlags.unsafeFullPermission || state.FullPermission
@@ -139,9 +140,47 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		warnNote(fmt.Sprintf("%q is not in the standalone profile — it may expect campaign infrastructure (siblings, ledger, tracker)", skill.Name))
 	}
 
+	// Interactive terminals launch the run in the BACKGROUND and attach:
+	// closing the terminal (or detaching with ctrl+c) leaves the run alive.
+	// --detach skips the attach; non-TTY and --json/--no-monitor keep the
+	// synchronous in-process semantics (CI needs the exit code and output).
+	interactive := isTTY() && !runFlags.json && !runFlags.noMonitor
+	if runFlags.detach || interactive {
+		runID, err := newRunID(skill.Name)
+		if err != nil {
+			fatalf(1, "mint run id: %v", err)
+		}
+		runID, err = startBackgroundRun(state, runRequest{
+			RunID:                runID,
+			Skill:                skill.Name,
+			Args:                 args,
+			Harness:              h.ID(),
+			Model:                runFlags.model,
+			MaxTurns:             runFlags.maxTurns,
+			UnsafeFullPermission: unsafeFullPermission,
+			BudgetOverride:       runFlags.budgetOverride,
+			StrictValidation:     runFlags.strictValidation,
+		})
+		if err != nil {
+			fatalf(1, "start background run: %v", err)
+		}
+		if !interactive || runFlags.detach {
+			if runFlags.json {
+				out, _ := json.MarshalIndent(map[string]string{"run_id": runID}, "", "  ")
+				fmt.Println(string(out))
+			} else {
+				printStarted(runID)
+			}
+			return
+		}
+		attachRunID(state, runID)
+		return
+	}
+
+	// Synchronous path.
 	opts := runner.Options{
 		State:                state,
-		API:                  client,
+		API:                  api.NewPythonCLI(state.VenvPython(), state.ChildEnv(), state.TraustRepo()),
 		Harness:              h,
 		Skill:                skill,
 		Args:                 args,
@@ -152,29 +191,9 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		StrictValidation:     runFlags.strictValidation,
 		DeclareSpend:         true,
 	}
-
-	var res *runner.RunResult
-	interactive := isTTY() && !runFlags.json && !runFlags.noMonitor
-	if interactive {
-		runCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		err = tui.RunMonitor(tui.MonitorHeader{
-			Skill: skill.Name, Harness: h.ID(), Model: runFlags.model,
-		}, cancel, func(sink runner.Sink) error {
-			r, rerr := runner.Run(runCtx, opts, sink)
-			if r != nil {
-				res = r
-			}
-			return rerr
-		})
-	} else {
-		res, err = runner.Run(ctx, opts, plainSink{})
-	}
+	res, err := runner.Run(ctx, opts, plainSink{})
 	if err != nil {
 		fatalf(1, "run: %v", err)
-	}
-	if res == nil {
-		fatalf(1, "run produced no result")
 	}
 
 	if runFlags.json {
@@ -186,6 +205,16 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		printRunSummary(res)
 	}
 	os.Exit(res.ExitCode)
+}
+
+// attachRunID attaches the monitor to a freshly started background run and
+// exits with the run's code when it completes while attached.
+func attachRunID(state *bootstrap.State, runID string) {
+	info, err := loadRunInfo(filepath.Join(state.RunsDir(), runID))
+	if err != nil || info == nil {
+		fatalf(1, "run %s vanished", runID)
+	}
+	runAttach(&cobra.Command{}, []string{runID})
 }
 
 func printRunSummary(res *runner.RunResult) {
@@ -269,7 +298,11 @@ func (plainSink) Progress(msg string) {
 	fmt.Println(tui.Wrap(style.Render("› "+msg), tui.TerminalWidth()))
 }
 
-func (plainSink) Event(ev harness.Event) {
+func (plainSink) Event(ev harness.Event) { renderPlainEvent(ev) }
+
+// renderPlainEvent prints one harness event as styled plain text — shared
+// by the synchronous sink, plain attach and `logs`.
+func renderPlainEvent(ev harness.Event) {
 	styles := theme.Default()
 	switch ev.Kind {
 	case harness.EventText:
@@ -277,7 +310,19 @@ func (plainSink) Event(ev harness.Event) {
 	case harness.EventThinking:
 		fmt.Println(tui.Wrap(styles.Muted.Render("· "+ev.Text), tui.TerminalWidth()))
 	case harness.EventToolCall:
-		fmt.Println(styles.Accent.Render("→ " + ev.Tool))
+		line := "→ " + ev.Tool
+		if ev.Text != "" {
+			line += "  " + ev.Text
+		}
+		fmt.Println(tui.Wrap(styles.Accent.Render(line), tui.TerminalWidth()))
+	case harness.EventToolResult:
+		style := styles.Muted
+		if ev.IsError {
+			style = styles.Warn
+		}
+		for _, l := range strings.Split(ev.Text, "\n") {
+			fmt.Println(tui.Wrap(style.Render("  │ "+l), tui.TerminalWidth()))
+		}
 	case harness.EventResult:
 		// Result text is printed in the summary.
 	case harness.EventError:
