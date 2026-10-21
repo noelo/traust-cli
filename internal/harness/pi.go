@@ -71,7 +71,11 @@ func (p *Pi) Command(ctx context.Context, spec *RunSpec) *exec.Cmd {
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
-	if !spec.UnsafeFullPermission {
+	if spec.UnsafeFullPermission {
+		// Full-permission mode: pi gates by tool declaration, not per-call
+		// approval, so "all tools auto-approved" is the full builtin set.
+		args = append(args, "--tools", "read,bash,edit,write,grep,find,ls")
+	} else {
 		args = append(args, "--tools", mapTools(spec.AllowedTools))
 	}
 	args = append(args, "--", spec.Prompt)

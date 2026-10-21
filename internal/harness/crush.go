@@ -30,6 +30,9 @@ func (c *Crush) Command(ctx context.Context, spec *RunSpec) *exec.Cmd {
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
+	if spec.UnsafeFullPermission {
+		args = append(args, "--yolo")
+	}
 	cmd := exec.CommandContext(ctx, c.Binary(), args...)
 	cmd.Dir = spec.Cwd
 	cmd.Env = spec.Env
@@ -40,7 +43,7 @@ func (c *Crush) Command(ctx context.Context, spec *RunSpec) *exec.Cmd {
 func (c *Crush) Notes() []string {
 	return []string{
 		"running through crush server mode: thinking, tool calls and token usage stream live into the monitor",
-		"permission and question requests cannot be answered unattended: the run fails closed (exit 2) naming the tool — pre-allow the tools skills need in a .crush/crushrc at the harness root (`permissions allow`)",
+		"without full-permission mode (consent at `traust-cli init`), permission and question requests fail closed (exit 2) — with it, the workspace runs with permissions skipped (--yolo equivalent)",
 		"if the server cannot start, the run falls back to `crush run` (plain text, no live events, no usage)",
 	}
 }

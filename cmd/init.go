@@ -14,14 +14,15 @@ import (
 )
 
 var initOpts struct {
-	workspace    string
-	forge        string
-	ref          string
-	configHome   string
-	toolchain    string
-	harness      string
-	writeProfile bool
-	yes          bool
+	workspace      string
+	forge          string
+	ref            string
+	configHome     string
+	toolchain      string
+	harness        string
+	fullPermission bool
+	writeProfile   bool
+	yes            bool
 }
 
 var initCmd = &cobra.Command{
@@ -49,6 +50,7 @@ func init() {
 	initCmd.Flags().StringVar(&initOpts.configHome, "config-home", "", "TRAUST_CONFIG_HOME (default <workspace>/config)")
 	initCmd.Flags().StringVar(&initOpts.toolchain, "toolchain", "none", "scanner toolchain profile (none, secure-code-audit, vuln-scan, triage, …)")
 	initCmd.Flags().StringVar(&initOpts.harness, "harness", "", "default agent harness (default: first detected)")
+	initCmd.Flags().BoolVar(&initOpts.fullPermission, "full-permission", false, "consent to full-permission runs: harness executes with all tools auto-approved (required by the harness's skills)")
 	initCmd.Flags().BoolVar(&initOpts.writeProfile, "write-profile", false, "also record TRAUST_CONFIG_HOME in your shell profile (install_traust --write-profile)")
 	initCmd.Flags().BoolVarP(&initOpts.yes, "yes", "y", false, "non-interactive: accept all defaults")
 }
@@ -85,6 +87,7 @@ func runInit(cmd *cobra.Command, args []string) {
 		initOpts.ref = answers.Ref
 		initOpts.toolchain = answers.ToolchainProfile
 		initOpts.harness = answers.Harness
+		initOpts.fullPermission = answers.FullPermission
 	}
 
 	log := func(format string, a ...any) {
@@ -99,6 +102,7 @@ func runInit(cmd *cobra.Command, args []string) {
 		ToolchainProfile: initOpts.toolchain,
 		WriteProfile:     initOpts.writeProfile,
 		Harness:          initOpts.harness,
+		FullPermission:   initOpts.fullPermission,
 	}, log)
 	if err != nil {
 		fatalf(1, "init: %v", err)

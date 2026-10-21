@@ -45,6 +45,18 @@ func (c *Crush) RunSession(ctx context.Context, spec *RunSpec, emit func(Event))
 	if err != nil {
 		return SessionResult{}, fmt.Errorf("create workspace: %w", err)
 	}
+
+	// Full-permission consent (init): skip the workspace's permission
+	// prompts — the server equivalent of `crush --yolo`. The traust
+	// skills cannot run unattended without it; without consent, permission
+	// requests fail closed (needs-input) instead.
+	if spec.UnsafeFullPermission {
+		code, err := srv.call(ctx, http.MethodPost, "/v1/workspaces/"+wsID+"/permissions/skip", map[string]bool{"skip": true}, nil)
+		if err != nil || code != http.StatusOK {
+			return SessionResult{}, fmt.Errorf("set permissions skip: %d %v", code, err)
+		}
+	}
+
 	sessID, err := srv.createSession(ctx, wsID)
 	if err != nil {
 		return SessionResult{}, fmt.Errorf("create session: %w", err)

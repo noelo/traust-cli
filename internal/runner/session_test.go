@@ -35,6 +35,9 @@ func fakeServeCrush(t *testing.T, script string) {
 	mux.HandleFunc("POST /v1/workspaces/{id}/current-session", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
+	mux.HandleFunc("POST /v1/workspaces/{id}/permissions/skip", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
 	mux.HandleFunc("POST /v1/workspaces/{id}/config/model", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
@@ -157,6 +160,46 @@ data: {"type":"run_complete","payload":{"type":"updated","payload":{"session_id"
 	}
 	if res.ExitCode != ExitNeedsInput || !res.NeedsInput {
 		t.Fatalf("exit = %d, needsInput = %v", res.ExitCode, res.NeedsInput)
+	}
+}
+
+func TestRunSessionModeFullPermissionFromState(t *testing.T) {
+	fakeServeCrush(t, happyServeScript)
+	state := testState(t)
+	state.FullPermission = true
+	if err := state.Save(); err != nil {
+		t.Fatal(err)
+	}
+	sink := &recSink{}
+
+	skill := testSkill()
+	skill.Standalone = &catalog.StandaloneInfo{MinModelClass: "opus"}
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: &fakeAPI{}, Harness: &harness.Crush{},
+		Skill: skill, DeclareSpend: true,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != ExitOK {
+		t.Fatalf("exit = %d (%+v)", res.ExitCode, res)
+	}
+	noted := false
+	for _, p := range sink.progress {
+		if strings.Contains(p, "full permission mode") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Error("full-permission note not surfaced")
+	}
+	specData, err := os.ReadFile(filepath.Join(res.Dir, "spec.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(specData), `"unsafe_full_permission": true`) {
+		t.Errorf("journal spec does not record full permission: %s", specData)
 	}
 }
 
