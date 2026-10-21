@@ -42,7 +42,7 @@ func Doctor(ctx context.Context, state *State, log LogFn) (*DoctorReport, error)
 	if state.FullPermission {
 		add("permission-mode", true, "full (consented at init): harnesses run with all tools auto-approved")
 	} else {
-		add("permission-mode", true, "scoped (fail-closed): permission requests abort runs with exit 2 — the harness's skills need `traust-cli init --full-permission`")
+		add("permission-mode", true, "scoped (fail-closed): permission requests abort runs with exit 2 — skills and flows (audit → triage → patch → verify) need `traust-cli init --full-permission`")
 	}
 
 	// Traust checkout + venv.
