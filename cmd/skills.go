@@ -99,21 +99,35 @@ func runSkills(cmd *cobra.Command, args []string) {
 		}
 		return skills[i].Name < skills[j].Name
 	})
-	fmt.Printf("  %-28s %-15s %-11s %s\n", styles.Label.Render("SKILL"), styles.Label.Render("STAGE"), styles.Label.Render("MIN MODEL"), styles.Label.Render("DESCRIPTION"))
-	for _, s := range skills {
-		minModel := "—"
-		if s.Standalone != nil && s.Standalone.MinModelClass != "" {
-			minModel = s.Standalone.MinModelClass
+	// Column layout adapts to the terminal. Below ~77 columns there is no
+	// room for a description column, so the table drops it rather than
+	// pushing rows past the right edge.
+	width := tui.TerminalWidth()
+	avail := width - 2
+	if avail < 28+15+11+3+20 {
+		fmt.Printf("  %-28s %-15s %-11s\n", styles.Label.Render("SKILL"), styles.Label.Render("STAGE"), styles.Label.Render("MIN MODEL"))
+		for _, s := range skills {
+			fmt.Printf("  %-28s %-15s %-11s\n",
+				tui.Truncate(s.Name, 28, "…"), tui.Truncate(orDash(s.Stage), 15, "…"), minModelOf(s))
 		}
-		desc := s.Description
-		if len(desc) > 70 {
-			desc = desc[:69] + "…"
+	} else {
+		descWidth := avail - 28 - 15 - 11 - 3
+		fmt.Printf("  %-28s %-15s %-11s %s\n", styles.Label.Render("SKILL"), styles.Label.Render("STAGE"), styles.Label.Render("MIN MODEL"), styles.Label.Render("DESCRIPTION"))
+		for _, s := range skills {
+			fmt.Printf("  %-28s %-15s %-11s %s\n",
+				tui.Truncate(s.Name, 28, "…"), tui.Truncate(orDash(s.Stage), 15, "…"), minModelOf(s), tui.Truncate(s.Description, descWidth, "…"))
 		}
-		fmt.Printf("  %-28s %-15s %-11s %s\n", s.Name, orDash(s.Stage), minModel, desc)
 	}
 	fmt.Println()
 	fmt.Println(styles.Muted.Render("run one: traust-cli run <skill> [args…] --harness <id>"))
 	os.Exit(0)
+}
+
+func minModelOf(s *catalog.Skill) string {
+	if s.Standalone != nil && s.Standalone.MinModelClass != "" {
+		return s.Standalone.MinModelClass
+	}
+	return "—"
 }
 
 func orDash(s string) string {
