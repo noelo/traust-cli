@@ -76,3 +76,14 @@ Initial implementation.
   the command list (still invocable), over-long command summaries were
   shortened, and the init --forge default URL moved out of the flag line
   (an unbreakable token that could not fit pflag's description column).
+- Runs execute in the background by default: `traust-cli run` spawns a
+  detached worker process (setsid, survives the terminal) and attaches to
+  it; `--detach` fires and forgets. The run journal is the event bus:
+  `attach` replays it and follows it live (Ctrl-C detaches without
+  cancelling — x twice cancels), `runs` lists run states, `stop` cancels
+  through a graceful SIGINT/SIGTERM/SIGKILL ladder, `logs` renders the
+  transcript and `result` prints the stored outcome with the run's own
+  exit code. Attaching to a finished run replays the full transcript.
+- The monitor now shows tool results (crush tool_result parts, truncated),
+  which are the bulk of a run's output; journal raw lines no longer
+  duplicate parsed events, so attach replays render once.

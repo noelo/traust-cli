@@ -77,7 +77,12 @@ need is an agent harness you are logged into.
 | `doctor` | CLI checks + `install_traust --doctor`; `--json` for CI. |
 | `update` | Move the pin to a newer tag and re-sync. |
 | `skills` | Catalog parsed from the same SKILL.md frontmatter the harness reads; TUI picker on a TTY, table otherwise; `--json`. |
-| `run <skill> [args…]` | Compose the SKILL.md into a prompt, pre-flight the model floor, drive the harness headlessly, journal everything, discover and validate artifacts, declare spend. Live TUI monitor on a TTY. |
+| `run <skill> [args…]` | Compose the SKILL.md into a prompt, pre-flight the model floor, and launch the run **in the background** (a detached worker process that survives the terminal), then attach. `-d/--detach` starts without attaching; `--json`/`--no-monitor` keep synchronous CI semantics. The journal records everything; artifacts are validated and spend declared. |
+| `attach <run>` | Live monitor over a background run: full transcript replay + live tail with thinking, tool calls and tool results. **Ctrl-C detaches without cancelling** (the run keeps going); `x` twice cancels. Works on finished runs too (full replay + result). Non-TTY degrades to a plain tail. |
+| `runs` (`ls`/`ps`) | List runs — running first, then newest — with state (running/done/failed/needs-input/budget-stop/aborted/orphaned), age and tokens; `--json`. |
+| `stop <run>` | Graceful cancel: SIGINT (context-driven teardown: crush cancel endpoint, server shutdown) → SIGTERM → SIGKILL. |
+| `logs <run>` | The run's rendered journal transcript. |
+| `result <run>` | The stored result: summary, artifacts, usage, error — exits with the run's own code. |
 | `report <file-or-dir>` | Validate (`reporting validate`), lint threat models (`reporting lint`), render (`reporting render`), and browse findings (severity-colored TUI). |
 | `ledger whoami\|findings\|layers\|verify` | Read-only views over a ledger service (`--url` or `TRAUST_LEDGER_URL`; the token comes from the env var named by `--token-env`). No submissions, no countersign. |
 

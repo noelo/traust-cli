@@ -1,8 +1,11 @@
 package runner
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -117,6 +120,88 @@ func (j *Journal) write(e journalEntry) {
 		return
 	}
 	j.stream.Write(append(data, '\n'))
+}
+
+// Entry is one parsed journal stream record.
+type Entry struct {
+	TS    string `json:"ts"`
+	Kind  string `json:"kind"`
+	Raw   string `json:"raw,omitempty"`
+	Event *Event `json:"event,omitempty"`
+}
+
+// ParseEntry decodes one stream.jsonl line.
+func ParseEntry(line []byte) (Entry, error) {
+	var e Entry
+	err := json.Unmarshal(line, &e)
+	return e, err
+}
+
+// Tailer incrementally reads new complete lines from a journal stream file.
+// It is the attach mechanism's read side: the worker writes, tailers replay
+// and follow. Multiple tailers on the same file are safe (read-only).
+type Tailer struct {
+	path   string
+	offset int64
+	file   *os.File
+}
+
+// NewTailer opens a stream file for incremental reading, starting at the
+// given byte offset (0 to replay from the beginning).
+func NewTailer(path string, offset int64) (*Tailer, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Tailer{path: path, offset: offset, file: f}, nil
+}
+
+// Offset returns the current read position.
+func (t *Tailer) Offset() int64 { return t.offset }
+
+// Close releases the underlying file.
+func (t *Tailer) Close() error { return t.file.Close() }
+
+// Read returns all complete lines appended since the last call. It never
+// blocks: an empty slice means nothing new yet.
+func (t *Tailer) Read() ([]string, error) {
+	var lines []string
+	buf := make([]byte, 32*1024)
+	pending := []byte{}
+	for {
+		n, err := t.file.Read(buf)
+		if n > 0 {
+			pending = append(pending, buf[:n]...)
+			for {
+				idx := bytes.IndexByte(pending, '\n')
+				if idx < 0 {
+					break
+				}
+				lines = append(lines, string(pending[:idx]))
+				pending = pending[idx+1:]
+			}
+			t.offset += int64(n)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// Carry partial data into the next call: seek back to the
+				// last complete line so the fragment is re-read.
+				if len(pending) > 0 {
+					t.offset -= int64(len(pending))
+					t.file.Seek(t.offset, io.SeekStart)
+				}
+				return lines, nil
+			}
+			return lines, err
+		}
+		if n == 0 {
+			return lines, nil
+		}
+	}
 }
 
 func nowRFC() string { return time.Now().UTC().Format(time.RFC3339Nano) }

@@ -478,12 +478,27 @@ func (s *crushServer) handleSSE(data, sessID, runID string, seenParts map[string
 				}
 			case "tool_call":
 				var p struct {
+					ID    string `json:"id"`
 					Name  string `json:"name"`
 					Input string `json:"input"`
 				}
 				if json.Unmarshal(part.Data, &p) == nil && p.Name != "" {
 					emit(Event{Kind: EventToolCall, Tool: p.Name, Text: firstLine(p.Input, 160)})
 				}
+			case "tool_result":
+				// The actual command/scanner output — the bulk of a run's
+				// output. Truncated to keep the transcript readable; the
+				// journal keeps what the harness sent.
+				var p struct {
+					ToolCallID string `json:"tool_call_id"`
+					Name       string `json:"name"`
+					Content    string `json:"content"`
+					IsError    bool   `json:"is_error"`
+				}
+				if json.Unmarshal(part.Data, &p) != nil || p.Content == "" {
+					break
+				}
+				emit(Event{Kind: EventToolResult, Tool: p.Name, Text: truncateBlock(p.Content, 6, 400), IsError: p.IsError})
 			}
 		}
 		seenParts[msg.ID] = len(msg.Parts)
@@ -559,6 +574,27 @@ func firstLine(s string, n int) string {
 		s = s[:n-1] + "…"
 	}
 	return s
+}
+
+// truncateBlock clips a multi-line tool output to at most maxLines lines
+// and maxChars characters, marking the cut.
+func truncateBlock(s string, maxLines, maxChars int) string {
+	s = strings.TrimRight(s, "\n")
+	lines := strings.Split(s, "\n")
+	cut := false
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		cut = true
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) > maxChars {
+		out = out[:maxChars-1]
+		cut = true
+	}
+	if cut {
+		out += "\n…"
+	}
+	return out
 }
 
 func randomID() string {
