@@ -101,3 +101,7 @@ Initial implementation.
   is an ordinary background run. `flow status` lists flows and stage
   detail; interactive flows follow stage-by-stage with Ctrl-C detaching
   without cancelling.
+- `peek <run-or-flow>`: a one-shot snapshot of what is happening right now
+  — state, usage and the last dozen journal entries, printed and gone. A
+  flow peek shows the stage chain and recurses into the current stage's
+  run.

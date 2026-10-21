@@ -248,16 +248,25 @@ func runFlowStatus(cmd *cobra.Command, args []string) {
 }
 
 func resolveFlow(dir, prefix string) *flowManifest {
+	m, err := resolveFlowE(dir, prefix)
+	if err != nil {
+		fatalf(1, "%v", err)
+	}
+	return m
+}
+
+// resolveFlowE resolves a flow by id prefix without exiting.
+func resolveFlowE(dir, prefix string) (*flowManifest, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		fatalf(1, "no flows: %v", err)
+		return nil, fmt.Errorf("no flows: %w", err)
 	}
 	var matches []*flowManifest
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if e.Name() == prefix || (len(prefix) >= 1 && (e.Name() == prefix || hasSuffixID(e.Name(), prefix))) {
+		if e.Name() == prefix || hasSuffixID(e.Name(), prefix) {
 			if m, err := loadFlowManifest(filepath.Join(dir, e.Name())); err == nil {
 				matches = append(matches, m)
 			}
@@ -265,13 +274,12 @@ func resolveFlow(dir, prefix string) *flowManifest {
 	}
 	switch len(matches) {
 	case 1:
-		return matches[0]
+		return matches[0], nil
 	case 0:
-		fatalf(1, "no flow matches %q", prefix)
+		return nil, fmt.Errorf("no flow matches %q", prefix)
 	default:
-		fatalf(1, "ambiguous flow prefix %q", prefix)
+		return nil, fmt.Errorf("ambiguous flow prefix %q", prefix)
 	}
-	return nil
 }
 
 func hasSuffixID(name, prefix string) bool {
