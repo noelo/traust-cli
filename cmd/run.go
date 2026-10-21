@@ -301,32 +301,11 @@ func (plainSink) Progress(msg string) {
 func (plainSink) Event(ev harness.Event) { renderPlainEvent(ev) }
 
 // renderPlainEvent prints one harness event as styled plain text — shared
-// by the synchronous sink, plain attach and `logs`.
+// by the synchronous sink, plain attach and `logs`. The string form lives
+// in renderEventString (peek).
 func renderPlainEvent(ev harness.Event) {
-	styles := theme.Default()
-	switch ev.Kind {
-	case harness.EventText:
-		fmt.Println(tui.Wrap(ev.Text, tui.TerminalWidth()))
-	case harness.EventThinking:
-		fmt.Println(tui.Wrap(styles.Muted.Render("· "+ev.Text), tui.TerminalWidth()))
-	case harness.EventToolCall:
-		line := "→ " + ev.Tool
-		if ev.Text != "" {
-			line += "  " + ev.Text
-		}
-		fmt.Println(tui.Wrap(styles.Accent.Render(line), tui.TerminalWidth()))
-	case harness.EventToolResult:
-		style := styles.Muted
-		if ev.IsError {
-			style = styles.Warn
-		}
-		for _, l := range strings.Split(ev.Text, "\n") {
-			fmt.Println(tui.Wrap(style.Render("  │ "+l), tui.TerminalWidth()))
-		}
-	case harness.EventResult:
-		// Result text is printed in the summary.
-	case harness.EventError:
-		fmt.Println(tui.Wrap(styles.Err.Render("✗ "+ev.Text), tui.TerminalWidth()))
+	if s := renderEventString(ev); s != "" {
+		fmt.Print(s)
 	}
 }
 

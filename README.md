@@ -81,6 +81,7 @@ need is an agent harness you are logged into.
 | `attach <run>` | Live monitor over a background run: full transcript replay + live tail with thinking, tool calls and tool results. **Ctrl-C detaches without cancelling** (the run keeps going); `x` twice cancels. Works on finished runs too (full replay + result). Non-TTY degrades to a plain tail. |
 | `runs` (`ls`/`ps`) | List runs — running first, then newest — with state (running/done/failed/needs-input/budget-stop/aborted/orphaned), age and tokens; `--json`. |
 | `stop <run>` | Graceful cancel: SIGINT (context-driven teardown: crush cancel endpoint, server shutdown) → SIGTERM → SIGKILL. |
+| `peek <run-or-flow>` | One-shot snapshot: state, usage and the last dozen journal entries — for runs and flows alike (a flow peek shows the stage chain plus the current stage's snapshot). |
 | `logs <run>` | The run's rendered journal transcript. |
 | `result <run>` | The stored result: summary, artifacts, usage, error — exits with the run's own code. |
 | `report <file-or-dir>` | Validate (`reporting validate`), lint threat models (`reporting lint`), render (`reporting render`), and browse findings (severity-colored TUI). |
