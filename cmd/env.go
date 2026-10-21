@@ -12,7 +12,7 @@ var envJSON bool
 
 var envCmd = &cobra.Command{
 	Use:   "env",
-	Short: "Print the environment the CLI injects into child processes",
+	Short: "Print the injected child environment",
 	Long: `The CLI does not write to your shell profile. It injects the harness
 venv PATH, TRAUST_CONFIG_HOME and HARNESS_BIN_DIR into every process it
 spawns. This command prints that environment — source it if you want the

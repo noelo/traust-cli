@@ -40,7 +40,7 @@ var ledgerWhoamiCmd = &cobra.Command{
 
 var ledgerFindingsCmd = &cobra.Command{
 	Use:   "findings [layer-id]",
-	Short: "List resolved finding dispositions (one layer or all)",
+	Short: "List resolved finding dispositions",
 	Run: func(cmd *cobra.Command, args []string) {
 		v := newLedgerViews()
 		layer := ""

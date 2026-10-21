@@ -32,7 +32,7 @@ var runFlags struct {
 
 var runCmd = &cobra.Command{
 	Use:   "run <skill> [args…]",
-	Short: "Execute a skill headlessly through your agent harness",
+	Short: "Run a skill headlessly through your harness",
 	Long: `Composes the skill's SKILL.md into a prompt, resolves the model-floor
 default from the registry, and drives the harness of your choice in headless
 mode. The agent always runs from the harness root — never inside the audit
