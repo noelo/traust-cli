@@ -137,7 +137,7 @@ func TestRunPipelineClaudeFake(t *testing.T) {
 	if res.Usage.TokensIn != 100 || res.Usage.TokensOut != 50 || res.Usage.CostUSD != 0.42 {
 		t.Errorf("usage = %+v", res.Usage)
 	}
-	if res.ResultText != "audit complete" {
+	if res.ResultText != "stage complete" {
 		t.Errorf("result text = %q", res.ResultText)
 	}
 	if len(res.Artifacts) != 1 {

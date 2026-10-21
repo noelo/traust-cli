@@ -86,6 +86,22 @@ need is an agent harness you are logged into.
 | `report <file-or-dir>` | Validate (`reporting validate`), lint threat models (`reporting lint`), render (`reporting render`), and browse findings (severity-colored TUI). |
 | `ledger whoami\|findings\|layers\|verify` | Read-only views over a ledger service (`--url` or `TRAUST_LEDGER_URL`; the token comes from the env var named by `--token-env`). No submissions, no countersign. |
 
+### Flows (multi-stage pipelines)
+
+```bash
+traust-cli flow audit-triage <repo>              # audit, then triage (--auto); output = triaged findings
+traust-cli flow remediate-verify <triage.json> <repo>   # patch the findings, then verify the patched code
+traust-cli flow full <repo>                      # the whole loop end to end
+traust-cli flow status [id]                      # list flows / show stage detail
+```
+
+Every stage is an ordinary background run (own journal, result, attach
+session); each stage's inputs are derived from the previous stage's
+artifacts — the audit report feeds triage, the triaged findings feed patch,
+and verify runs against a fresh checkout with the generated patches
+applied. Ctrl-C detaches without cancelling; `flow status` shows progress
+and `attach <id>` follows the current stage.
+
 ### Exit codes (a contract)
 
 | Code | Meaning |
