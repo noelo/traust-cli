@@ -105,3 +105,7 @@ Initial implementation.
   — state, usage and the last dozen journal entries, printed and gone. A
   flow peek shows the stage chain and recurses into the current stage's
   run.
+- The init wizard's full-permission confirm now defaults to Yes (the
+  recommended choice) and its warning spells out that runs and flows
+  (audit → triage → patch → verify) fail closed without it; doctor's
+  scoped-mode message says the same.

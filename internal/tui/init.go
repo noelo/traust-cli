@@ -24,6 +24,9 @@ func RunInitWizard(defaultWorkspace, defaultForge string, detected []string, def
 		Ref:              "latest",
 		ToolchainProfile: "none",
 		Harness:          defaultHarness,
+		// Full permission is the recommended default: the harness's skills
+		// cannot run unattended without it, so the confirm highlights Yes.
+		FullPermission: true,
 	}
 
 	harnessOptions := []huh.Option[string]{}
@@ -73,9 +76,10 @@ func RunInitWizard(defaultWorkspace, defaultForge string, detected []string, def
 		),
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title("Run skills with full permissions?").
-				Description("The traust harness's skills REQUIRE unattended tool use (bash, file writes) — "+
-					"without full permission they fail closed on the first permission request. "+
+				Title("Run skills with full permissions? (recommended)").
+				Description("The traust harness's skills REQUIRE unattended tool use (bash, file writes). "+
+					"WARNING: without full permission, runs and flows (audit → triage → patch → verify) "+
+					"fail closed on the first permission request — most workflows will not complete. "+
 					"With it, your harness runs with all tools auto-approved "+
 					"(claude --dangerously-skip-permissions, crush --yolo, codex --dangerously-bypass-approvals-and-sandbox). "+
 					"S9 isolation still applies: agents run from the harness root and never load the audit target's configuration.").
