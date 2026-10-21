@@ -118,6 +118,11 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	runID := time.Now().Format("20060102-150405") + "-" + skill.Name
 	res := &RunResult{RunID: runID, Skill: skill.Name, Harness: h.ID(), ExitCode: ExitOK}
 
+	// Full-permission consent: the per-run flag OR the init-time consent
+	// recorded in state (the SDK Provider path has no cmd layer to resolve
+	// it).
+	unsafeFullPermission := opts.UnsafeFullPermission || state.FullPermission
+
 	// Pre-flight: model floor.
 	pf := ResolveModel(ctx, opts.API, skill, opts.Model)
 	res.Preflight = pf
@@ -147,7 +152,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		Harness: h.ID(), Model: pf.Model,
 		RegistryRole: pf.Role, FloorModel: pf.ResolvedModel, ModelWarning: pf.Warning,
 		BudgetCap: res.BudgetCap, BudgetOverride: opts.BudgetOverrideReason,
-		UnsafeFullPermission: opts.UnsafeFullPermission,
+		UnsafeFullPermission: unsafeFullPermission,
 		TraustRef:            state.TraustRef, TraustSHA: state.TraustSHA,
 	})
 	if err != nil {
@@ -185,6 +190,9 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	for _, note := range h.Notes() {
 		sink.Progress("note: " + note)
 	}
+	if unsafeFullPermission {
+		sink.Progress("note: full permission mode (consented) — the harness runs with all tools auto-approved; S9 isolation, budget bands and the run journal still apply")
+	}
 
 	// Launch.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -192,7 +200,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	spec := &harness.RunSpec{
 		Prompt: prompt, Model: pf.Model, Cwd: root, Env: state.ChildEnv(),
 		AllowedTools: skill.AllowedTools, MaxTurns: opts.MaxTurns,
-		UnsafeFullPermission: opts.UnsafeFullPermission, OutDir: journal.Dir,
+		UnsafeFullPermission: unsafeFullPermission, OutDir: journal.Dir,
 	}
 
 	// handleEvent folds one normalized event into journal, sink, result and
@@ -298,7 +306,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		sink.Progress(fmt.Sprintf("budget refuse band hit (%d output tokens, cap %d) — harness terminated; re-run with --budget-override \"<reason>\" if this is expected", res.Usage.TokensOut, res.BudgetCap))
 	case res.NeedsInput:
 		res.ExitCode = ExitNeedsInput
-		sink.Progress("the skill asked for interactive input or a permission grant, which a headless run cannot provide — run it interactively in your harness and answer its questions, then re-run")
+		sink.Progress("the skill raised a permission request or question that a headless run cannot answer — enable full-permission mode (re-run `traust-cli init`, or --unsafe-full-permission for this run), or pre-allow the tool in your harness's config")
 	case ctx.Err() != nil:
 		res.Aborted = true
 		res.ExitCode = ExitError

@@ -11,6 +11,7 @@ type InitAnswers struct {
 	Ref              string
 	ToolchainProfile string
 	Harness          string
+	FullPermission   bool
 }
 
 // RunInitWizard asks the interactive setup questions. detected lists the
@@ -69,6 +70,16 @@ func RunInitWizard(defaultWorkspace, defaultForge string, detected []string, def
 				Description("Detected on PATH. You can switch per run with --harness.").
 				Options(harnessOptions...).
 				Value(&answers.Harness),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Run skills with full permissions?").
+				Description("The traust harness's skills REQUIRE unattended tool use (bash, file writes) — "+
+					"without full permission they fail closed on the first permission request. "+
+					"With it, your harness runs with all tools auto-approved "+
+					"(claude --dangerously-skip-permissions, crush --yolo, codex --dangerously-bypass-approvals-and-sandbox). "+
+					"S9 isolation still applies: agents run from the harness root and never load the audit target's configuration.").
+				Value(&answers.FullPermission),
 		),
 	)
 	if err := form.Run(); err != nil {

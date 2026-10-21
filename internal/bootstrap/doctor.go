@@ -39,6 +39,11 @@ func Doctor(ctx context.Context, state *State, log LogFn) (*DoctorReport, error)
 
 	// State file present and parseable (caller already loaded it).
 	add("state", true, StatePath(state.Workspace))
+	if state.FullPermission {
+		add("permission-mode", true, "full (consented at init): harnesses run with all tools auto-approved")
+	} else {
+		add("permission-mode", true, "scoped (fail-closed): permission requests abort runs with exit 2 — the harness's skills need `traust-cli init --full-permission`")
+	}
 
 	// Traust checkout + venv.
 	repo := state.TraustRepo()

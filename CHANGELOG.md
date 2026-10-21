@@ -50,3 +50,13 @@ Initial implementation.
   through the cancel endpoint before teardown. Permission and question
   requests cannot be satisfied unattended and fail closed (exit 2) naming
   the tool. Runs fall back to `crush run` when the server cannot start.
+- Full-permission consent: `traust-cli init` asks whether to run skills
+  with all tools auto-approved (the harness's skills require unattended
+  bash and file writes) and records the answer in the workspace state;
+  headless installs pass `--full-permission`. Runs translate the consent
+  into the right flag per harness — claude
+  `--dangerously-skip-permissions`, crush `--yolo` / the server's
+  permissions-skip endpoint, codex
+  `--dangerously-bypass-approvals-and-sandbox`, pi's full toolset — and
+  surface it in the notes, the run journal and `doctor`. Without consent,
+  permission requests still fail closed (exit 2) with guidance.

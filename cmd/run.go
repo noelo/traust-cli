@@ -50,7 +50,7 @@ func init() {
 	runCmd.Flags().StringVar(&runFlags.harnessID, "harness", "", "agent harness (claude, codex, pi, opencode, crush, goose; default: state default)")
 	runCmd.Flags().StringVar(&runFlags.model, "model", "", "model override (default: the registry floor for the skill's role)")
 	runCmd.Flags().IntVar(&runFlags.maxTurns, "max-turns", 0, "cap agent turns (0 = harness default)")
-	runCmd.Flags().BoolVar(&runFlags.unsafeFullPermission, "unsafe-full-permission", false, "grant the harness full permission (--dangerously-skip-permissions / --yolo class)")
+	runCmd.Flags().BoolVar(&runFlags.unsafeFullPermission, "unsafe-full-permission", false, "grant the harness full permission for this run (also settable at init: --full-permission)")
 	runCmd.Flags().StringVar(&runFlags.budgetOverride, "budget-override", "", "reason to proceed past the budget refuse band (recorded)")
 	runCmd.Flags().BoolVar(&runFlags.json, "json", false, "machine-readable result summary on stdout")
 	runCmd.Flags().BoolVar(&runFlags.strictValidation, "strict", false, "strict schema validation of artifacts")
@@ -128,6 +128,13 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 
 	client := api.NewPythonCLI(state.VenvPython(), state.ChildEnv(), state.TraustRepo())
 
+	// Full-permission mode: explicit per-run flag, or the init-time consent
+	// recorded in state. The harness's skills require unattended tool use.
+	unsafeFullPermission := runFlags.unsafeFullPermission || state.FullPermission
+	if unsafeFullPermission && !runFlags.unsafeFullPermission {
+		fmt.Fprintln(os.Stderr, theme.Default().Warn.Render("note: full-permission mode active (consented at init; re-run `traust-cli init` to change) — harness runs with all tools auto-approved"))
+	}
+
 	if skill.Standalone == nil {
 		styles := theme.Default()
 		fmt.Fprintln(os.Stderr, styles.Warn.Render("warning: "+fmt.Sprintf("%q is not in the standalone profile — it may expect campaign infrastructure (siblings, ledger, tracker)", skill.Name)))
@@ -141,7 +148,7 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		Args:                 args,
 		Model:                runFlags.model,
 		MaxTurns:             runFlags.maxTurns,
-		UnsafeFullPermission: runFlags.unsafeFullPermission,
+		UnsafeFullPermission: unsafeFullPermission,
 		BudgetOverrideReason: runFlags.budgetOverride,
 		StrictValidation:     runFlags.strictValidation,
 		DeclareSpend:         true,

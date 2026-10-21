@@ -33,6 +33,9 @@ type InitOptions struct {
 	WriteProfile bool
 	// Harness is the default harness id to store in state; empty auto-detects.
 	Harness string
+	// FullPermission records the consent to run harnesses with all tools
+	// auto-approved (the traust skills require it).
+	FullPermission bool
 }
 
 // LogFn receives progress lines during init.
@@ -164,6 +167,12 @@ func Init(ctx context.Context, opts InitOptions, log LogFn) (*State, error) {
 	}
 	if state.Harness == "" {
 		state.Harness = "claude"
+	}
+
+	// 7. Full-permission consent (explicit --full-permission or a prior
+	// consent survives re-inits; the wizard's answer arrives via opts).
+	if opts.FullPermission {
+		state.FullPermission = true
 	}
 
 	if err := state.Save(); err != nil {

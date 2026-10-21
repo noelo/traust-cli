@@ -24,16 +24,22 @@ var ErrNotInitialized = errors.New("traust-cli is not initialized — run `traus
 // <workspace>/cli/state.json. It is deliberately outside TRAUST_CONFIG_HOME,
 // which is schema-gated deployment configuration owned by the harness.
 type State struct {
-	Version           int       `json:"version"`
-	Workspace         string    `json:"workspace"`
-	ConfigHome        string    `json:"config_home"`
-	TraustRef         string    `json:"traust_ref"`
-	TraustSHA         string    `json:"traust_sha"`
-	UvVersion         string    `json:"uv_version,omitempty"`
-	Harness           string    `json:"harness,omitempty"`
-	ToolchainProfiles []string  `json:"toolchain_profiles,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	Version           int      `json:"version"`
+	Workspace         string   `json:"workspace"`
+	ConfigHome        string   `json:"config_home"`
+	TraustRef         string   `json:"traust_ref"`
+	TraustSHA         string   `json:"traust_sha"`
+	UvVersion         string   `json:"uv_version,omitempty"`
+	Harness           string   `json:"harness,omitempty"`
+	ToolchainProfiles []string `json:"toolchain_profiles,omitempty"`
+	// FullPermission records the init-time consent to run skills with all
+	// tools auto-approved (claude --dangerously-skip-permissions, crush
+	// --yolo / permissions/skip, codex --dangerously-bypass-approvals...).
+	// The traust harness's skills require it; without it, permission
+	// requests fail closed (exit 2).
+	FullPermission bool      `json:"full_permission,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // DefaultWorkspace returns the default managed workspace root (~/.traust).

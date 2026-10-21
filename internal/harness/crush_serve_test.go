@@ -27,6 +27,7 @@ type fakeCrush struct {
 	agentRunID  string
 	cancelCalls []string
 	modelReqs   []map[string]any
+	skipReqs    []bool
 	script      func(w io.Writer, r *http.Request, sid, runID string)
 	agentPosted chan struct{}
 	postOnce    sync.Once
@@ -85,6 +86,17 @@ func startFakeCrush(t *testing.T, script func(w io.Writer, r *http.Request, sid,
 	})
 
 	mux.HandleFunc("POST /v1/workspaces/{id}/agent/update", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("POST /v1/workspaces/{id}/permissions/skip", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Skip bool `json:"skip"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.skipReqs = append(f.skipReqs, body.Skip)
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -263,6 +275,37 @@ func TestCrushServeIgnoresForeignRunComplete(t *testing.T) {
 	}
 	if res.Text != "mine" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestCrushServeFullPermissionSkipsPermissions(t *testing.T) {
+	f := startFakeCrush(t, happyScript)
+	_, err := (&Crush{}).RunSession(context.Background(), &RunSpec{
+		Prompt: "do the audit", Cwd: t.TempDir(), Env: os.Environ(),
+		UnsafeFullPermission: true,
+	}, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.skipReqs) != 1 || !f.skipReqs[0] {
+		t.Errorf("permissions/skip requests = %v (want one skip=true)", f.skipReqs)
+	}
+}
+
+func TestCrushServeScopedModeDoesNotSkipPermissions(t *testing.T) {
+	f := startFakeCrush(t, happyScript)
+	_, err := (&Crush{}).RunSession(context.Background(), &RunSpec{
+		Prompt: "do the audit", Cwd: t.TempDir(), Env: os.Environ(),
+	}, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.skipReqs) != 0 {
+		t.Errorf("scoped mode must not touch permissions/skip: %v", f.skipReqs)
 	}
 }
 

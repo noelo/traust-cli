@@ -76,6 +76,12 @@ func TestPiCommand(t *testing.T) {
 	if !contains(args, "--tools") || !contains(args, "read,bash,edit,write,grep,find,ls") {
 		t.Errorf("pi default tools wrong: %v", args)
 	}
+	// Full-permission mode: the complete builtin toolset.
+	unsafe := spec()
+	unsafe.UnsafeFullPermission = true
+	if args := argsOf(t, &Pi{}, unsafe); !contains(args, "read,bash,edit,write,grep,find,ls") {
+		t.Errorf("pi full-permission tools wrong: %v", args)
+	}
 	// Task and AskUserQuestion are unmappable and dropped.
 	mapped := mapTools([]string{"Read", "Task", "AskUserQuestion", "Grep"})
 	if mapped != "read,grep" {
@@ -100,6 +106,11 @@ func TestCrushCommand(t *testing.T) {
 		if !contains(cmd.Args, want) {
 			t.Errorf("crush args missing %q: %v", want, cmd.Args)
 		}
+	}
+	unsafe := spec()
+	unsafe.UnsafeFullPermission = true
+	if args := argsOf(t, &Crush{}, unsafe); !contains(args, "--yolo") {
+		t.Errorf("full-permission crush run should pass --yolo: %v", args)
 	}
 	if cmd.Stdin == nil {
 		t.Error("crush should take the prompt on stdin")
