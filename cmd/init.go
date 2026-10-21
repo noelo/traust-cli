@@ -46,7 +46,7 @@ TRAUST_CONFIG_HOME and the venv PATH into the processes it spawns. Pass
 func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringVar(&initOpts.workspace, "workspace", "", "managed workspace root (default ~/.traust)")
-	initCmd.Flags().StringVar(&initOpts.forge, "forge", bootstrap.DefaultForge, "git URL to clone traust from")
+	initCmd.Flags().StringVar(&initOpts.forge, "forge", "", "git URL to clone traust from (default: the public traust repository)")
 	initCmd.Flags().StringVar(&initOpts.ref, "ref", "latest", "tag or branch to pin (or \"latest\" for the newest stable tag)")
 	initCmd.Flags().StringVar(&initOpts.configHome, "config-home", "", "TRAUST_CONFIG_HOME (default <workspace>/config)")
 	initCmd.Flags().StringVar(&initOpts.toolchain, "toolchain", "none", "scanner toolchain profile (none, secure-code-audit, vuln-scan, triage, …)")
@@ -54,6 +54,14 @@ func init() {
 	initCmd.Flags().BoolVar(&initOpts.fullPermission, "full-permission", false, "consent to full-permission runs: harness executes with all tools auto-approved (required by the harness's skills)")
 	initCmd.Flags().BoolVar(&initOpts.writeProfile, "write-profile", false, "also record TRAUST_CONFIG_HOME in your shell profile (install_traust --write-profile)")
 	initCmd.Flags().BoolVarP(&initOpts.yes, "yes", "y", false, "non-interactive: accept all defaults")
+}
+
+// defaultForge is the wizard's placeholder for the forge URL.
+func defaultForge() string {
+	if initOpts.forge != "" {
+		return initOpts.forge
+	}
+	return bootstrap.DefaultForge
 }
 
 func runInit(cmd *cobra.Command, args []string) {
@@ -79,7 +87,7 @@ func runInit(cmd *cobra.Command, args []string) {
 		if defaultHarness == "" {
 			defaultHarness = "claude"
 		}
-		answers, err := tui.RunInitWizard(workspace, initOpts.forge, detected, defaultHarness)
+		answers, err := tui.RunInitWizard(workspace, defaultForge(), detected, defaultHarness)
 		if err != nil {
 			fatalf(1, "init wizard: %v", err)
 		}

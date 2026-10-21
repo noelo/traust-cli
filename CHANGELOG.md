@@ -69,3 +69,10 @@ Initial implementation.
 - Interactive screens now gate on a real terminal check (ioctl) instead of
   "is a character device": `traust-cli skills < /dev/null` used to open the
   picker and hang forever, because /dev/null is a character device.
+- Cobra help output respects the terminal width: flag usages wrap with
+  continuations aligned under each description (FlagUsagesWrapped at the
+  measured width), Long descriptions re-wrap, the trailing use-hint breaks
+  on narrow terminals, cobra's built-in completion commands are hidden from
+  the command list (still invocable), over-long command summaries were
+  shortened, and the init --forge default URL moved out of the flag line
+  (an unbreakable token that could not fit pflag's description column).

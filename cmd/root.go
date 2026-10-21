@@ -37,10 +37,53 @@ journals.`,
 
 // Execute runs the root command.
 func Execute() {
+	installWrappedUsageTemplate()
 	if err := rootCmd.Execute(); err != nil {
 		styles := theme.Default()
 		fmt.Fprintln(os.Stderr, styles.Err.Render("error: "+err.Error()))
 		os.Exit(1)
+	}
+}
+
+// installWrappedUsageTemplate makes cobra's help respect the terminal width.
+// The default template emits flag usages unwrapped, so long descriptions
+// hard-wrap at the terminal's right edge with continuations at column zero
+// while the flags themselves are indented. pflag already knows how to wrap
+// (FlagUsagesWrapped aligns continuations under each description); the
+// template is patched in place rather than copied, so it tracks cobra's
+// default. Long descriptions and the trailing use-hint are wrapped the same
+// way, and cobra's built-in completion commands are hidden (their summaries
+// are too long for narrow terminals and they remain invocable). Templates
+// inherit from the root, so every subcommand is covered.
+func installWrappedUsageTemplate() {
+	width := tui.TerminalWidth()
+	if width < 60 {
+		width = 60
+	}
+	tmpl := rootCmd.UsageTemplate()
+	patched := strings.ReplaceAll(tmpl,
+		".FlagUsages | trimTrailingWhitespaces",
+		fmt.Sprintf(".FlagUsagesWrapped %d | trimTrailingWhitespaces", width))
+	if width < 78 {
+		patched = strings.ReplaceAll(patched,
+			"for more information about a command.",
+			"for more\ninformation about a command.")
+	}
+	if patched != tmpl {
+		rootCmd.SetUsageTemplate(patched)
+	}
+	rootCmd.CompletionOptions.HiddenDefaultCmd = true
+	wrapCommandLongs(rootCmd, width)
+}
+
+// wrapCommandLongs re-wraps every command's Long description to the current
+// width; cobra renders them verbatim.
+func wrapCommandLongs(cmd *cobra.Command, width int) {
+	if cmd.Long != "" {
+		cmd.Long = tui.Wrap(cmd.Long, width)
+	}
+	for _, sub := range cmd.Commands() {
+		wrapCommandLongs(sub, width)
 	}
 }
 
