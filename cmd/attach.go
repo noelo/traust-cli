@@ -43,8 +43,16 @@ func runAttach(cmd *cobra.Command, args []string) {
 	attachByID(info)
 }
 
-// attachByID runs the attach flow over a resolved run.
+// attachByID runs the attach flow over a resolved run, then exits with the
+// run's own code when it finished while attached.
 func attachByID(info *RunInfo) {
+	attachOnce(info)
+	printAttachExit(info)
+}
+
+// attachOnce attaches without any exit handling — the pipeline follower
+// reuses it stage after stage.
+func attachOnce(info *RunInfo) {
 	// Header from the run's spec.
 	header := tui.MonitorHeader{Skill: info.Skill, RunID: info.ID}
 	if data, err := os.ReadFile(filepath.Join(info.Dir, "spec.json")); err == nil {
@@ -73,7 +81,6 @@ func attachByID(info *RunInfo) {
 	if err != nil {
 		fatalf(1, "attach: %v", err)
 	}
-	printAttachExit(info)
 }
 
 // plainAttach is the non-TTY tail: replay + follow until the run finishes.

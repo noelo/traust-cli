@@ -28,6 +28,21 @@ func setupWorkerWorkspace(t *testing.T, ws string) *bootstrap.State {
 	if err := os.WriteFile(filepath.Join(ws, "traust", "harnessing", "3-audit", "secure-code-audit", "SKILL.md"), []byte(skill), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The pipeline skills, for flow chaining tests.
+	for _, s := range []struct{ dir, name string }{
+		{"4-triage/triage", "triage"},
+		{"7-remediate/patch", "patch"},
+		{"8-verify/verify-remediation", "verify-remediation"},
+	} {
+		d := filepath.Join(ws, "traust", "harnessing", s.dir)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + s.name + "\ndescription: test skill\nmetadata:\n  harness:\n    tier: primary\n---\nRun on $ARGUMENTS.\n"
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// A fake venv python: the worker delegates validation and spend to it,
 	// and this double reports success for every engine call.
 	if err := os.MkdirAll(filepath.Join(ws, "traust", ".venv", "bin"), 0o755); err != nil {

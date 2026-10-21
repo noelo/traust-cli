@@ -92,3 +92,12 @@ Initial implementation.
   process (and the terminal) stayed open until a second ctrl+c killed it.
   The relay now abandons the feed the moment the monitor exits; one ctrl+c
   detaches cleanly, printing the re-attach hint and exiting 0.
+- Multi-stage flows: `flow audit-triage` (audit then triage, outputting
+  triaged findings), `flow remediate-verify` (patch then verify against a
+  patched checkout with the generated patches applied) and `flow full`
+  (the whole loop). Stages chain through their artifacts — the audit
+  report feeds triage (--auto for headless), triaged findings feed patch,
+  verify audits a fresh clone with the patches applied — and every stage
+  is an ordinary background run. `flow status` lists flows and stage
+  detail; interactive flows follow stage-by-stage with Ctrl-C detaching
+  without cancelling.
