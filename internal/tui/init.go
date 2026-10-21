@@ -6,12 +6,11 @@ import (
 
 // InitAnswers is the outcome of the init wizard.
 type InitAnswers struct {
-	Workspace        string
-	Forge            string
-	Ref              string
-	ToolchainProfile string
-	Harness          string
-	FullPermission   bool
+	Workspace      string
+	Forge          string
+	Ref            string
+	Harness        string
+	FullPermission bool
 }
 
 // RunInitWizard asks the interactive setup questions. detected lists the
@@ -19,11 +18,10 @@ type InitAnswers struct {
 // preselected one.
 func RunInitWizard(defaultWorkspace, defaultForge string, detected []string, defaultHarness string) (*InitAnswers, error) {
 	answers := &InitAnswers{
-		Workspace:        defaultWorkspace,
-		Forge:            defaultForge,
-		Ref:              "latest",
-		ToolchainProfile: "none",
-		Harness:          defaultHarness,
+		Workspace: defaultWorkspace,
+		Forge:     defaultForge,
+		Ref:       "latest",
+		Harness:   defaultHarness,
 		// Full permission is the recommended default: the harness's skills
 		// cannot run unattended without it, so the confirm highlights Yes.
 		FullPermission: true,
@@ -54,18 +52,6 @@ func RunInitWizard(defaultWorkspace, defaultForge string, detected []string, def
 				Description(`A vX.Y.Z tag, a branch, or "latest" for the newest stable tag.`).
 				Placeholder("latest").
 				Value(&answers.Ref),
-		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Scanner toolchain profile").
-				Description("Baseline skills (threat-model, vuln-scan) need nothing; secure-code-audit benefits from its pinned scanners.").
-				Options(
-					huh.NewOption("none — baseline only (threat-model, vuln-scan)", "none"),
-					huh.NewOption("secure-code-audit — opengrep, gitleaks, osv-scanner, tokei", "secure-code-audit"),
-					huh.NewOption("vuln-scan", "vuln-scan"),
-					huh.NewOption("triage", "triage"),
-				).
-				Value(&answers.ToolchainProfile),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().

@@ -193,6 +193,21 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 
 	before := snapshotArtifacts(root)
 
+	// Pre-flight toolchain: skills whose scanners live in a toolchain
+	// profile degrade (thinner evidence, weaker coverage) when the profile
+	// is incomplete. The skills still run — this is a warning with the fix,
+	// not a gate.
+	if skill.Standalone != nil && skill.Standalone.Toolchain != "" {
+		profile := skill.Standalone.Toolchain
+		if tcres, err := opts.API.ToolchainDoctor(ctx, profile); err == nil && tcres.ExitCode != 0 {
+			msg := fmt.Sprintf("toolchain profile %q for %s is incomplete — the skill will run with reduced scanner coverage; install it with `traust-cli init` (or `--toolchain %s`)", profile, skill.Name, profile)
+			if tail := firstLines(tcres.Output(), 3); tail != "" {
+				msg += "\n" + tail
+			}
+			sink.Progress("warning: " + msg)
+		}
+	}
+
 	// Capability caveats, up front.
 	for _, note := range h.Notes() {
 		sink.Progress("note: " + note)

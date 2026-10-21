@@ -33,8 +33,11 @@ type runRequest struct {
 }
 
 // newRunID mints a collision-safe run id: timestamp + skill + random suffix.
+// The suffix is 3 bytes (6 hex chars): a 2-byte suffix collides ~8% of the
+// time once a dozen runs share a second (birthday paradox), and a collision
+// means a shared run directory.
 func newRunID(skill string) (string, error) {
-	buf := make([]byte, 2)
+	buf := make([]byte, 3)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
@@ -129,10 +132,10 @@ func shortRunID(runID string) string {
 	return runID
 }
 
-// isHexSuffix reports whether s is a 4-character hex string (the random
-// suffix minted by newRunID).
+// isHexSuffix reports whether s is a short hex string (4-6 characters) —
+// the random suffix minted by newRunID, in either width.
 func isHexSuffix(s string) bool {
-	if len(s) != 4 {
+	if len(s) < 4 || len(s) > 6 {
 		return false
 	}
 	for _, r := range s {

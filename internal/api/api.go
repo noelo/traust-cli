@@ -56,6 +56,10 @@ type TraustAPI interface {
 	// (`traust registry models spend`). Best effort: a missing
 	// progress-tracker configuration is a warning in the engine, not an error.
 	RegistryModelsSpend(ctx context.Context, row SpendRow) error
+	// ToolchainDoctor checks a scanner toolchain profile
+	// (`traust admin toolchain doctor --profile <p>`). A non-zero exit
+	// means tools are missing, outdated, or their databases are absent.
+	ToolchainDoctor(ctx context.Context, profile string) (Result, error)
 }
 
 // PythonCLI runs the traust engine CLI through the harness venv's Python.
@@ -159,4 +163,9 @@ func (p *PythonCLI) RegistryModelsSpend(ctx context.Context, row SpendRow) error
 		return fmt.Errorf("registry models spend: %s", res.Output())
 	}
 	return nil
+}
+
+// ToolchainDoctor implements TraustAPI.
+func (p *PythonCLI) ToolchainDoctor(ctx context.Context, profile string) (Result, error) {
+	return p.run(ctx, []string{"admin", "toolchain", "doctor", "--profile", profile})
 }

@@ -47,6 +47,9 @@ type StandaloneInfo struct {
 	Role string `json:"role,omitempty" yaml:"role"`
 	// MinModelClass is the documented minimum viable model class.
 	MinModelClass string `json:"min_model_class,omitempty" yaml:"min_model_class"`
+	// Toolchain is the install-toolchain profile the skill's scanners
+	// live in (empty = scanner-free); the runner pre-flights it.
+	Toolchain string `json:"toolchain,omitempty" yaml:"toolchain"`
 	// Env lists extra environment/infrastructure requirements.
 	Env []string `json:"env,omitempty" yaml:"env"`
 }
