@@ -6,6 +6,7 @@
 # the SKILL.md frontmatter of a traust checkout.
 #
 # Fields per skill:
+#   toolchain:      install-toolchain profile the skill's scanners live in
 #   role:           model-registry role whose floor applies (empty = none)
 #   min_model_class: documented minimum viable model class
 #   env:            extra environment/infrastructure requirements
@@ -16,12 +17,15 @@ skills:
   secure-code-audit:
     role: deep-audit
     min_model_class: mythos
+    toolchain: secure-code-audit
   secure-rpm-audit:
     role: deep-audit
     min_model_class: mythos
+    toolchain: secure-rpm-audit
   secure-container-audit:
     role: deep-audit
     min_model_class: opus
+    toolchain: secure-container-audit
     env: [skopeo, syft, grype]
   cloud-config-audit:
     role: deep-audit
@@ -43,6 +47,7 @@ skills:
   vuln-scan:
     role: vuln-scan
     min_model_class: opus
+    toolchain: vuln-scan
   triage:
     role: triage-verifier
     min_model_class: mythos
@@ -69,6 +74,7 @@ skills:
   verify-remediation:
     role: verification-verdict
     min_model_class: mythos
+    toolchain: secure-code-audit
   generate-team-report:
     role: render-narrate
     min_model_class: opus
@@ -90,5 +96,7 @@ skills:
     env: [gh]
   dependency-watch:
     min_model_class: opus
+    toolchain: dependency-watch
   impact-analysis:
     min_model_class: opus
+    toolchain: impact-analysis

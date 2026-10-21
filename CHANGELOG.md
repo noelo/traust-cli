@@ -109,3 +109,16 @@ Initial implementation.
   recommended choice) and its warning spells out that runs and flows
   (audit → triage → patch → verify) fail closed without it; doctor's
   scoped-mode message says the same.
+- init installs the secure-code-audit scanner toolchain by default (one
+  profile covers every flow stage — a superset of the vuln-scan and triage
+  profiles) and no longer asks: the wizard question was a decision users
+  could not make before knowing what they would run. --toolchain none
+  stays for opt-out, and already-installed profiles are skipped so re-init
+  stays fast.
+- Runs pre-flight the skill's toolchain profile (admin toolchain doctor)
+  and surface a non-fatal warning naming the profile, the coverage cost,
+  and the fix when it is incomplete — degraded audits now say why they
+  are degraded instead of silently producing thinner evidence.
+- Run ids widened to a 6-hex random suffix: the 4-hex suffix collided
+  ~8% of the time once a dozen runs shared a second, and a collision
+  meant a shared run directory.

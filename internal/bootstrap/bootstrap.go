@@ -146,19 +146,33 @@ func Init(ctx context.Context, opts InitOptions, log LogFn) (*State, error) {
 		}
 	}
 
-	// 5. Optional scanner toolchain profile.
+	// 5. Scanner toolchain profile: secure-code-audit by default — it
+	// covers every stage of the default flow (a superset of the vuln-scan
+	// and triage profiles). Already-installed profiles are skipped so
+	// re-running init stays fast and idempotent.
 	if opts.ToolchainProfile != "" && opts.ToolchainProfile != "none" {
-		log("installing toolchain profile %s", opts.ToolchainProfile)
-		py := state.VenvPython()
-		tc := exec.CommandContext(ctx, py, "-m", "traust.cli", "admin", "toolchain", "setup", "--profile", opts.ToolchainProfile)
-		tc.Dir = repo
-		tc.Env = state.ChildEnv()
-		tc.Stdout = lineWriter(log)
-		tc.Stderr = lineWriter(log)
-		if err := tc.Run(); err != nil {
-			return nil, fmt.Errorf("toolchain setup (%s): %w", opts.ToolchainProfile, err)
+		installed := false
+		for _, p := range state.ToolchainProfiles {
+			if p == opts.ToolchainProfile {
+				installed = true
+				break
+			}
 		}
-		state.ToolchainProfiles = appendUnique(state.ToolchainProfiles, opts.ToolchainProfile)
+		if installed {
+			log("toolchain profile %s already installed — skipping", opts.ToolchainProfile)
+		} else {
+			log("installing toolchain profile %s", opts.ToolchainProfile)
+			py := state.VenvPython()
+			tc := exec.CommandContext(ctx, py, "-m", "traust.cli", "admin", "toolchain", "setup", "--profile", opts.ToolchainProfile)
+			tc.Dir = repo
+			tc.Env = state.ChildEnv()
+			tc.Stdout = lineWriter(log)
+			tc.Stderr = lineWriter(log)
+			if err := tc.Run(); err != nil {
+				return nil, fmt.Errorf("toolchain setup (%s): %w", opts.ToolchainProfile, err)
+			}
+			state.ToolchainProfiles = appendUnique(state.ToolchainProfiles, opts.ToolchainProfile)
+		}
 	}
 
 	// 6. Default harness.

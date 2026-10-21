@@ -252,7 +252,7 @@ func TestNewRunIDUniqueness(t *testing.T) {
 			t.Fatalf("duplicate run id %s", id)
 		}
 		seen[id] = true
-		if short := shortRunID(id); short == id || len(short) != 4 {
+		if short := shortRunID(id); short == id || len(short) != 6 {
 			t.Errorf("short form of %s = %q", id, short)
 		}
 	}

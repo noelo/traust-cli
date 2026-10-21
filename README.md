@@ -73,7 +73,7 @@ need is an agent harness you are logged into.
 
 | Command | What it does |
 |---|---|
-| `init` | Bootstrap the managed workspace: pinned uv (checksum-verified, never `curl \| sh`), traust checkout at a stable tag, `uv sync`, `TRAUST_CONFIG_HOME` from templates via `install_traust`, optional toolchain profile. Idempotent; nothing is written to your shell profile (use `eval "$(traust-cli env)"` if you want it). |
+| `init` | Bootstrap the managed workspace: pinned uv (checksum-verified, never `curl \| sh`), traust checkout at a stable tag, `uv sync`, `TRAUST_CONFIG_HOME` from templates via `install_traust`, and the `secure-code-audit` scanner toolchain (covers every flow stage; `--toolchain none` skips, already-installed profiles are skipped). Idempotent; nothing is written to your shell profile (use `eval "$(traust-cli env)"` if you want it). |
 | `doctor` | CLI checks + `install_traust --doctor`; `--json` for CI. |
 | `update` | Move the pin to a newer tag and re-sync. |
 | `skills` | Catalog parsed from the same SKILL.md frontmatter the harness reads; TUI picker on a TTY, table otherwise; `--json`. |

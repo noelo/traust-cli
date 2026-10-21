@@ -17,13 +17,15 @@ import (
 
 // fakeAPI records every delegated engine call.
 type fakeAPI struct {
-	resolveModel string
-	resolveErr   error
-	validateExit int
-	validated    []string
-	rendered     []string
-	linted       []string
-	spendRows    []api.SpendRow
+	resolveModel  string
+	resolveErr    error
+	validateExit  int
+	toolchainExit int
+	toolchainHits []string
+	validated     []string
+	rendered      []string
+	linted        []string
+	spendRows     []api.SpendRow
 }
 
 func (f *fakeAPI) ReportingValidate(_ context.Context, path string, _ bool) (api.Result, error) {
@@ -57,6 +59,11 @@ func (f *fakeAPI) RegistryModelsResolve(_ context.Context, role string) (string,
 func (f *fakeAPI) RegistryModelsSpend(_ context.Context, row api.SpendRow) error {
 	f.spendRows = append(f.spendRows, row)
 	return nil
+}
+
+func (f *fakeAPI) ToolchainDoctor(_ context.Context, profile string) (api.Result, error) {
+	f.toolchainHits = append(f.toolchainHits, profile)
+	return api.Result{ExitCode: f.toolchainExit, Stdout: "MISSING opengrep (not found)\nMISSING gitleaks (not found)"}, nil
 }
 
 // recSink records sink traffic.
@@ -95,7 +102,7 @@ func testSkill() *catalog.Skill {
 		Tier:         "primary",
 		Body:         "Audit the target at $ARGUMENTS. Validate the report.",
 		AllowedTools: []string{"Read", "Bash(git clone:*)"},
-		Standalone:   &catalog.StandaloneInfo{Role: "deep-audit", MinModelClass: "mythos"},
+		Standalone:   &catalog.StandaloneInfo{Role: "deep-audit", MinModelClass: "mythos", Toolchain: "secure-code-audit"},
 	}
 }
 
@@ -439,6 +446,64 @@ func TestRunFailedRunStillDiscoversArtifacts(t *testing.T) {
 	}
 	if !res.Artifacts[0].Valid {
 		t.Errorf("partial artifact should still validate: %+v", res.Artifacts[0])
+	}
+}
+
+// TestRunToolchainPreflightWarns verifies a skill with a toolchain profile
+// gets a doctor check whose failure surfaces as a NON-fatal warning naming
+// the fix.
+func TestRunToolchainPreflightWarns(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	state := testState(t)
+	client := &fakeAPI{toolchainExit: 1}
+	sink := &recSink{}
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: client, Harness: &harness.Claude{},
+		Skill: testSkill(), DeclareSpend: false,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// secure-code-audit's profile was checked…
+	if len(client.toolchainHits) != 1 || client.toolchainHits[0] != "secure-code-audit" {
+		t.Errorf("toolchain doctor calls = %v", client.toolchainHits)
+	}
+	// …the warning names the profile and the fix…
+	warned := false
+	for _, p := range sink.progress {
+		if strings.Contains(p, `toolchain profile "secure-code-audit"`) && strings.Contains(p, "reduced scanner coverage") && strings.Contains(p, "traust-cli init") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("toolchain warning not surfaced: %v", sink.progress)
+	}
+	// …and the run still completes (degraded, not gated).
+	if res.ExitCode != ExitOK {
+		t.Fatalf("exit = %d — toolchain preflight must be a warning, not a gate", res.ExitCode)
+	}
+}
+
+// TestRunToolchainPreflightSkipsCleanProfiles verifies a healthy profile
+// produces no warning.
+func TestRunToolchainPreflightSkipsCleanProfiles(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	state := testState(t)
+	client := &fakeAPI{toolchainExit: 0}
+	sink := &recSink{}
+
+	_, err := Run(context.Background(), Options{
+		State: state, API: client, Harness: &harness.Claude{},
+		Skill: testSkill(), DeclareSpend: false,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range sink.progress {
+		if strings.Contains(p, "toolchain profile") {
+			t.Errorf("clean profile should not warn: %q", p)
+		}
 	}
 }
 
