@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/traust-security/traust-cli/internal/bootstrap"
 	"github.com/traust-security/traust-cli/internal/harness"
@@ -91,7 +92,7 @@ func runInit(cmd *cobra.Command, args []string) {
 	}
 
 	log := func(format string, a ...any) {
-		fmt.Println(styles.Accent.Render(fmt.Sprintf(format, a...)))
+		fmt.Println(tui.Wrap(styles.Accent.Render(fmt.Sprintf(format, a...)), tui.TerminalWidth()))
 	}
 
 	state, err := bootstrap.Init(ctx, bootstrap.InitOptions{
@@ -149,12 +150,9 @@ func shortSHA(sha string) string {
 }
 
 // isTTY reports whether the CLI can render interactive screens: both stdin
-// and stdout must be character devices (piped output means plain mode).
+// and stdout must be real terminals. The check is ioctl-based — /dev/null is
+// a character device but not a terminal, and treating it as one hangs the
+// picker waiting for input that will never arrive.
 func isTTY() bool {
-	in, err := os.Stdin.Stat()
-	if err != nil || in.Mode()&os.ModeCharDevice == 0 {
-		return false
-	}
-	out, err := os.Stdout.Stat()
-	return err == nil && out.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }

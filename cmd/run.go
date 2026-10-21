@@ -132,12 +132,11 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 	// recorded in state. The harness's skills require unattended tool use.
 	unsafeFullPermission := runFlags.unsafeFullPermission || state.FullPermission
 	if unsafeFullPermission && !runFlags.unsafeFullPermission {
-		fmt.Fprintln(os.Stderr, theme.Default().Warn.Render("note: full-permission mode active (consented at init; re-run `traust-cli init` to change) — harness runs with all tools auto-approved"))
+		warnNote("full-permission mode active (consented at init; re-run `traust-cli init` to change) — harness runs with all tools auto-approved")
 	}
 
 	if skill.Standalone == nil {
-		styles := theme.Default()
-		fmt.Fprintln(os.Stderr, styles.Warn.Render("warning: "+fmt.Sprintf("%q is not in the standalone profile — it may expect campaign infrastructure (siblings, ledger, tracker)", skill.Name)))
+		warnNote(fmt.Sprintf("%q is not in the standalone profile — it may expect campaign infrastructure (siblings, ledger, tracker)", skill.Name))
 	}
 
 	opts := runner.Options{
@@ -204,7 +203,7 @@ func printRunSummary(res *runner.RunResult) {
 	if res.HarnessError != "" {
 		fmt.Println()
 		fmt.Println(styles.Err.Render("harness error:"))
-		fmt.Println(indent(res.HarnessError, "  "))
+		fmt.Println(indent(wrapBlock(res.HarnessError, tui.TerminalWidth()-4), "  "))
 	}
 	if len(res.Artifacts) > 0 {
 		fmt.Println()
@@ -217,7 +216,7 @@ func printRunSummary(res *runner.RunResult) {
 			if a.Rendered != "" {
 				extra = styles.Muted.Render(" (rendered → " + a.Rendered + ")")
 			}
-			fmt.Printf("  %s %s%s\n", mark, a.Path, extra)
+			fmt.Println(tui.Wrap(mark+" "+a.Path+extra, tui.TerminalWidth()))
 		}
 	}
 	if res.ResultText != "" {
@@ -227,12 +226,32 @@ func printRunSummary(res *runner.RunResult) {
 	}
 }
 
+// wrapBlock normalizes a multi-line block for display: trailing whitespace
+// is stripped, leading indentation from source formatting (e.g. a harness's
+// styled error box) is dropped so re-wrapped lines start at the left edge,
+// and every line wraps to width.
+func wrapBlock(s string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return tui.Wrap(strings.Join(lines, "\n"), width)
+}
+
 func indent(s, prefix string) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for i, l := range lines {
 		lines[i] = prefix + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// warnNote prints a wrapped warning to stderr.
+func warnNote(msg string) {
+	fmt.Fprintln(os.Stderr, tui.Wrap(theme.Default().Warn.Render("warning: "+msg), tui.TerminalWidth()))
 }
 
 // plainSink prints run updates as styled plain text (non-TTY or --no-monitor).

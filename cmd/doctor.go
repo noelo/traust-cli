@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/traust-security/traust-cli/internal/bootstrap"
 	"github.com/traust-security/traust-cli/internal/theme"
+	"github.com/traust-security/traust-cli/internal/tui"
 )
 
 var doctorJSON bool
@@ -50,7 +52,9 @@ func runDoctor(cmd *cobra.Command, args []string) {
 			}
 			fmt.Printf("  %s %s\n", mark, c.Name)
 			if c.Detail != "" {
-				fmt.Println(styles.Muted.Render("      " + c.Detail))
+				// Details can be multi-line and long (subprocess output):
+				// normalize the block and wrap it to the terminal width.
+				fmt.Println(styles.Muted.Render(indent(tui.Wrap(strings.TrimSpace(c.Detail), tui.TerminalWidth()-8), "      ")))
 			}
 		}
 	}

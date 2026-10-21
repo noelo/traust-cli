@@ -60,3 +60,12 @@ Initial implementation.
   `--dangerously-bypass-approvals-and-sandbox`, pi's full toolset — and
   surface it in the notes, the run journal and `doctor`. Without consent,
   permission requests still fail closed (exit 2) with guidance.
+- Every remaining print path now respects the terminal width: the
+  full-permission and standalone-profile warnings, the run summary's
+  harness-error block (source indentation from harness error boxes is
+  stripped so re-wrapped lines start at the left edge) and artifact lines,
+  doctor details, init step logs, and the skills table (which drops its
+  description column below ~77 columns instead of overflowing).
+- Interactive screens now gate on a real terminal check (ioctl) instead of
+  "is a character device": `traust-cli skills < /dev/null` used to open the
+  picker and hang forever, because /dev/null is a character device.
