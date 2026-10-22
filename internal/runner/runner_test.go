@@ -507,6 +507,41 @@ func TestRunToolchainPreflightSkipsCleanProfiles(t *testing.T) {
 	}
 }
 
+// TestAuthFailureGuidance is the regression test for the silent-401 class
+// of failure: an authentication error must carry actionable guidance
+// naming the resolved model, the registry fix, and flag placement.
+func TestAuthFailureGuidance(t *testing.T) {
+	t.Setenv("TRAUST_CLI_CLAUDE_BIN", fakeHarnessPath(t, "fake-claude.sh"))
+	t.Setenv("FAKE_CLAUDE_MODE", "fail-auth")
+	state := testState(t)
+	sink := &recSink{}
+
+	res, err := Run(context.Background(), Options{
+		State: state, API: &fakeAPI{}, Harness: &harness.Claude{},
+		Skill: testSkill(), DeclareSpend: false,
+	}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != ExitError {
+		t.Fatalf("exit = %d", res.ExitCode)
+	}
+	for _, want := range []string{"authentication failed for model", "model-registry.yaml", "--model BEFORE the skill name"} {
+		if !strings.Contains(res.HarnessError, want) {
+			t.Errorf("harness error missing %q: %q", want, res.HarnessError)
+		}
+	}
+	noted := false
+	for _, p := range sink.progress {
+		if strings.Contains(p, "authentication failed for model") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Error("guidance not surfaced to the sink")
+	}
+}
+
 func TestPreflightNoRole(t *testing.T) {
 	skill := testSkill()
 	skill.Standalone = &catalog.StandaloneInfo{MinModelClass: "opus"}

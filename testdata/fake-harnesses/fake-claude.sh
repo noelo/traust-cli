@@ -25,6 +25,13 @@ if [ "${FAKE_CLAUDE_MODE:-}" = "fail" ]; then
   exit 3
 fi
 
+# fail-auth: a run-level authentication failure surfaced through the
+# stream (the crush session shape: run_complete carries the error).
+if [ "${FAKE_CLAUDE_MODE:-}" = "fail-auth" ]; then
+  printf '%s\n' '{"type":"result","subtype":"error","is_error":true,"result":"unauthorized: POST \"https://api.anthropic.com/v1/messages\": 401 Unauthorized {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}"}'
+  exit 0
+fi
+
 if [ "${FAKE_CLAUDE_MODE:-}" = "slow" ]; then
   printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
   sleep 30
