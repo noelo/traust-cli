@@ -167,3 +167,10 @@ Initial implementation.
   as informational. Rendering is scoped to the audit-report family —
   triage JSONs have no title field and crashed the report renderer; their
   skills write their own Markdown companions.
+- Harness adapters verified against the installed clients and updated
+  for their current wire formats: pi >= 1.4 carries the final assistant
+  message and usage on turn_end (message.usage), opencode >= 1.19 uses
+  top-level event types with part payloads and part.tokens on
+  step_finish, and claude's thinking blocks and system bookkeeping
+  (thinking-token estimates) are mapped or silenced instead of leaking
+  as raw JSON. Recognized-but-ignored protocol events no longer print.

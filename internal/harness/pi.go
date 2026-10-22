@@ -108,7 +108,11 @@ func (p *Pi) ParseEvent(line []byte) (Event, bool) {
 			Error    string `json:"error"`
 		} `json:"assistantMessageEvent"`
 		Message *struct {
-			Role    string `json:"role"`
+			Role  string `json:"role"`
+			Usage *struct {
+				Input  int64 `json:"input"`
+				Output int64 `json:"output"`
+			} `json:"usage"`
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -151,7 +155,8 @@ func (p *Pi) ParseEvent(line []byte) (Event, bool) {
 		return Event{Kind: EventToolCall, Tool: m.ToolName}, true
 	case "message_end":
 		if m.Message == nil || m.Message.Role != "assistant" {
-			return Event{}, false
+			// System/user message bookkeeping: recognized, ignored.
+			return Event{}, m.Message != nil
 		}
 		var sb strings.Builder
 		for _, block := range m.Message.Content {
@@ -166,8 +171,37 @@ func (p *Pi) ParseEvent(line []byte) (Event, bool) {
 			return Event{}, false
 		}
 		return Event{Kind: EventText, Text: sb.String()}, true
+	case "turn_end":
+		// pi >= 1.4 carries the final assistant message (content AND
+		// usage) on turn_end rather than message_end.
+		if m.Message == nil || m.Message.Role != "assistant" {
+			return Event{}, false
+		}
+		ev := Event{Kind: EventResult}
+		var sb strings.Builder
+		for _, block := range m.Message.Content {
+			if block.Type == "text" {
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(block.Text)
+			}
+		}
+		ev.Text = sb.String()
+		if m.Message.Usage != nil {
+			ev.TokensIn, ev.TokensOut = m.Message.Usage.Input, m.Message.Usage.Output
+		} else if m.Usage != nil {
+			ev.TokensIn, ev.TokensOut = m.Usage.Input, m.Usage.Output
+		}
+		return ev, true
 	case "agent_settled":
 		return Event{Kind: EventResult, IsError: m.Aborted}, true
+	case "session", "agent_start", "agent_end", "turn_start":
+		// Protocol bookkeeping: recognized, ignored — printing them as raw
+		// lines was pure noise.
+		return Event{}, true
+	case "message_start":
+		return Event{}, true
 	}
 	return Event{}, false
 }
