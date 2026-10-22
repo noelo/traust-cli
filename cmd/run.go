@@ -33,13 +33,19 @@ var runFlags struct {
 }
 
 var runCmd = &cobra.Command{
-	Use:   "run <skill> [args…]",
+	Use:   "run [flags] <skill> [args…]",
 	Short: "Run a skill headlessly through your harness",
 	Long: `Composes the skill's SKILL.md into a prompt, resolves the model-floor
 default from the registry, and drives the harness of your choice in headless
 mode. The agent always runs from the harness root — never inside the audit
 target (rule S9) — and every output line is journaled under
 ~/.traust/cli/runs/.
+
+Flags come BEFORE the skill name; everything after it is passed through to
+the skill verbatim, including its own flags:
+
+  traust-cli run triage <report.json> --auto
+  traust-cli run --harness crush vuln-scan /src/app --diff --since abc
 
 Exit codes: 0 ok · 1 error · 2 the skill needs interactive input · 3 budget
 refuse band hit.`,
@@ -58,6 +64,12 @@ func init() {
 	runCmd.Flags().BoolVar(&runFlags.strictValidation, "strict", false, "strict schema validation of artifacts")
 	runCmd.Flags().BoolVar(&runFlags.noMonitor, "no-monitor", false, "plain output even on a TTY (synchronous, in-process)")
 	runCmd.Flags().BoolVarP(&runFlags.detach, "detach", "d", false, "start in the background without attaching (interactive runs attach by default)")
+
+	// Git-style passthrough: our flags are parsed only BEFORE the skill
+	// name; everything after it — including skill flags like triage's
+	// --auto or vuln-scan's --diff --since — is passed through verbatim
+	// instead of being rejected as unknown CLI flags.
+	runCmd.Flags().SetInterspersed(false)
 }
 
 func runRun(cmd *cobra.Command, args []string) {

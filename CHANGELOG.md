@@ -133,3 +133,7 @@ Initial implementation.
   only when) it is empty, so a fresh workspace is self-contained instead
   of sending the agent hunting for any analysis-results checkout it can
   find.
+- `run` passes skill flags through verbatim (git-style): traust-cli's own
+  flags are parsed only before the skill name, so `run triage <report>
+  --auto` works instead of failing with "unknown flag". Flags after the
+  skill name — --auto, --diff, --since, --votes — belong to the skill.
