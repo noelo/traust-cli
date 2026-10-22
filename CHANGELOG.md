@@ -137,3 +137,11 @@ Initial implementation.
   flags are parsed only before the skill name, so `run triage <report>
   --auto` works instead of failing with "unknown flag". Flags after the
   skill name — --auto, --diff, --since, --votes — belong to the skill.
+- Authentication failures now explain themselves: when a harness error
+  is a provider 401, the run appends guidance naming the resolved model
+  and its registry role, the model-registry.yaml fix, and the reminder
+  that --model must come before the skill name (a model can be listed
+  AND unauthenticated — availability checks cannot see credentials).
+- Error results that arrive with a zero process exit code (claude error
+  subtypes, crush run_complete errors) no longer read as successful
+  runs; the result's error text is recorded as the harness error.

@@ -217,7 +217,7 @@ func TestRunSessionModeRunError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ExitCode != ExitError || res.HarnessError != "provider 401" {
+	if res.ExitCode != ExitError || !strings.HasPrefix(res.HarnessError, "provider 401") {
 		t.Fatalf("exit = %d, harnessError = %q", res.ExitCode, res.HarnessError)
 	}
 }

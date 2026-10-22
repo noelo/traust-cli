@@ -356,6 +356,20 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		sink.Progress(fmt.Sprintf("stream read error: %v", scanErr))
 	}
 
+	// Authentication failures get actionable guidance: they almost always
+	// mean the registry floor resolved to a model whose provider the
+	// harness cannot authenticate to (a model can be listed AND
+	// unauthenticated — availability checks cannot see credentials).
+	if res.HarnessError != "" && looksLikeAuthFailure(res.HarnessError) {
+		guide := fmt.Sprintf("authentication failed for model %q", res.Model)
+		if pf.Role != "" {
+			guide += fmt.Sprintf(" (registry floor for role %q)", pf.Role)
+		}
+		guide += fmt.Sprintf(" — map the role to a model you can authenticate to in %s, or pass --model BEFORE the skill name (flags after the skill name belong to the skill)", filepath.Join(state.ConfigHome, "model-registry.yaml"))
+		res.HarnessError += "\n" + guide
+		sink.Progress("note: " + guide)
+	}
+
 	if !sessionDone && !h.Capabilities().StreamJSON && res.ResultText == "" {
 		res.ResultText = strings.TrimRight(plainOut.String(), "\n")
 	}
@@ -417,6 +431,18 @@ func fileTail(path string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
+// looksLikeAuthFailure reports whether a harness error is an authentication
+// failure (provider 401s and their localized variants).
+func looksLikeAuthFailure(s string) bool {
+	l := strings.ToLower(s)
+	for _, marker := range []string{"401", "unauthorized", "authentication_error", "invalid x-api-key", "invalid api key", "permission denied: api"} {
+		if strings.Contains(l, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyEvent folds a stream event into the run result. Usage is cumulative in
 // every reporting harness, so tokens are maxed, not summed.
 func applyEvent(res *RunResult, ev harness.Event) {
@@ -431,6 +457,12 @@ func applyEvent(res *RunResult, ev harness.Event) {
 	}
 	switch ev.Kind {
 	case harness.EventResult:
+		if ev.IsError && ev.Text != "" {
+			// Error results (claude error subtypes, crush run_complete
+			// errors) can arrive with a zero process exit code; without
+			// this the run would read as successful.
+			res.HarnessError = ev.Text
+		}
 		if ev.Text != "" {
 			res.ResultText = ev.Text
 		}
