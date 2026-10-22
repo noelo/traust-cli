@@ -229,7 +229,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	// the budget bands — shared by the session and process paths.
 	band := BandWithin
 	handleEvent := func(ev harness.Event) {
-		journal.Event(string(ev.Kind), ev.Text, ev.Tool, ev.TokensIn, ev.TokensOut, ev.CostUSD, ev.IsError)
+		journal.Event(string(ev.Kind), ev.Text, ev.Tool, ev.TokensIn, ev.TokensOut, ev.CostUSD, ev.IsError, ev.Key)
 		sink.Event(ev)
 		applyEvent(res, ev)
 		if ev.Kind == harness.EventNeedsInput {

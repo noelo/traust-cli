@@ -46,6 +46,11 @@ type Event struct {
 	TokensOut int64     `json:"tokens_out,omitempty"`
 	CostUSD   float64   `json:"cost_usd,omitempty"`
 	IsError   bool      `json:"is_error,omitempty"`
+	// Key, when set, identifies a streaming part whose content is
+	// REPLACED as it grows (crush streams message parts incrementally):
+	// renderers update the line registered under the key in place instead
+	// of appending. Unkeyed events append.
+	Key string `json:"key,omitempty"`
 }
 
 // Caps declares what a harness can express, honestly. The CLI prints

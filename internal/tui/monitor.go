@@ -57,7 +57,7 @@ type monitorModel struct {
 	stop                func()
 	styles              theme.Styles
 	viewport            viewport.Model
-	lines               []string
+	lines               []monitorLine
 	tokensIn, tokensOut int64
 	cost                float64
 	band                string
@@ -72,6 +72,14 @@ type monitorModel struct {
 	lastOutput    time.Time
 	started       time.Time
 	width, height int
+}
+
+// monitorLine is one transcript line; keyed lines are updated in place by
+// streaming parts (crush rewrites message content as it grows), unkeyed
+// lines append.
+type monitorLine struct {
+	key  string
+	text string
 }
 
 const armWindow = 6 * time.Second
@@ -174,15 +182,19 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *monitorModel) applyEvent(ev harness.Event) {
 	switch ev.Kind {
 	case harness.EventText:
-		m.pushLine(ev.Text)
+		if ev.Key != "" {
+			m.upsertLine(ev.Key, ev.Text)
+		} else {
+			m.pushLine(ev.Text)
+		}
 	case harness.EventThinking:
-		m.pushLine(m.styles.Muted.Italic(true).Render("· thinking: " + ev.Text))
+		m.upsertLine(ev.Key, m.styles.Muted.Italic(true).Render("· "+ev.Text))
 	case harness.EventToolCall:
 		line := "→ " + ev.Tool
 		if ev.Text != "" {
 			line += "  " + ev.Text
 		}
-		m.pushLine(m.styles.Accent.Render(line))
+		m.upsertLine(ev.Key, m.styles.Accent.Render(line))
 	case harness.EventToolResult:
 		// The tool's actual output, already truncated by the adapter.
 		if ev.Text == "" {
@@ -193,9 +205,11 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 		if ev.IsError {
 			style = m.styles.Warn
 		}
+		var b strings.Builder
 		for _, l := range strings.Split(ev.Text, "\n") {
-			m.pushLine(style.Render(prefix + l))
+			b.WriteString(style.Render(prefix+l) + "\n")
 		}
+		m.upsertLine(ev.Key, strings.TrimRight(b.String(), "\n"))
 	case harness.EventUsage:
 		m.tokensIn, m.tokensOut = ev.TokensIn, ev.TokensOut
 	case harness.EventResult:
@@ -217,12 +231,35 @@ func (m *monitorModel) applyEvent(ev harness.Event) {
 	}
 }
 
-// pushLine stores a styled line UNWRAPPED and rebuilds the viewport at the
-// current width. Lines are wrapped, never truncated — the transcript stays
-// complete at any terminal size.
+// pushLine appends one or more lines (a multi-line string splits).
 func (m *monitorModel) pushLine(line string) {
+	m.upsertLine("", line)
+}
+
+// upsertLine writes a line: keyed lines update the line registered under
+// the key in place (creating it at the end when new), unkeyed lines
+// append. Streaming parts rewrite themselves instead of piling up
+// fragments.
+func (m *monitorModel) upsertLine(key, line string) {
 	line = strings.ReplaceAll(line, "\r", "")
-	m.lines = append(m.lines, strings.Split(line, "\n")...)
+	if key == "" {
+		for _, l := range strings.Split(line, "\n") {
+			m.lines = append(m.lines, monitorLine{text: l})
+		}
+	} else {
+		at := -1
+		for i := range m.lines {
+			if m.lines[i].key == key {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			m.lines = append(m.lines, monitorLine{key: key, text: line})
+		} else {
+			m.lines[at].text = line
+		}
+	}
 	if len(m.lines) > 1000 {
 		m.lines = m.lines[len(m.lines)-1000:]
 	}
@@ -240,7 +277,7 @@ func (m *monitorModel) rebuild() {
 	}
 	wrapped := make([]string, 0, len(m.lines))
 	for _, l := range m.lines {
-		wrapped = append(wrapped, Wrap(l, width))
+		wrapped = append(wrapped, Wrap(l.text, width))
 	}
 	m.viewport.SetContent(strings.Join(wrapped, "\n"))
 	m.viewport.GotoBottom()

@@ -113,18 +113,21 @@ func runLogs(cmd *cobra.Command, args []string) {
 		fatalf(1, "no journal at %s: %v", stream, err)
 	}
 	fmt.Println(styles.Muted.Render("journal: " + stream))
+	events := newKeyedRenderer(os.Stdout)
 	for _, line := range splitLines(string(data)) {
 		if it, ok := journalLineToItem(line); ok {
 			switch it.Kind {
 			case tui.ItemEvent:
-				renderPlainEvent(it.Event)
+				events.Event(it.Event)
 			case tui.ItemRaw:
+				events.Flush()
 				if it.Text != "" {
 					fmt.Println(tui.Wrap(styles.Muted.Render("  "+it.Text), tui.TerminalWidth()))
 				}
 			}
 		}
 	}
+	events.Flush()
 	if resultExists(info.Dir) {
 		printResultFromDir(info.Dir)
 	}

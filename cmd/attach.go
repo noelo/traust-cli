@@ -87,6 +87,7 @@ func attachOnce(info *RunInfo) {
 func plainAttach(info *RunInfo) {
 	styles := theme.Default()
 	fmt.Println(styles.Accent.Render(fmt.Sprintf("▸ attaching to %s (%s) — Ctrl-C detaches", info.ID, info.State)))
+	events := newKeyedRenderer(os.Stdout)
 	items := make(chan tui.MonitorItem, 128)
 	go func() {
 		tailJournal(info.Dir, items)
@@ -94,17 +95,21 @@ func plainAttach(info *RunInfo) {
 	for it := range items {
 		switch it.Kind {
 		case tui.ItemEvent:
-			renderPlainEvent(it.Event)
+			events.Event(it.Event)
 		case tui.ItemRaw:
+			events.Flush()
 			if it.Text != "" {
 				fmt.Println(tui.Wrap(styles.Muted.Render("  "+it.Text), tui.TerminalWidth()))
 			}
 		case tui.ItemProgress:
+			events.Flush()
 			fmt.Println(tui.Wrap(styles.Accent.Render("› "+it.Text), tui.TerminalWidth()))
 		case tui.ItemDone:
+			events.Flush()
 			fmt.Println(styles.Muted.Render("— run complete —"))
 		}
 	}
+	events.Flush()
 	printResultFromDir(info.Dir)
 }
 
@@ -202,6 +207,7 @@ func harnessEvent(e runner.Event) harness.Event {
 		TokensOut: e.TokensOut,
 		CostUSD:   e.CostUSD,
 		IsError:   e.IsError,
+		Key:       e.Key,
 	}
 }
 

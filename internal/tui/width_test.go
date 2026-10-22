@@ -13,6 +13,30 @@ import (
 	"github.com/traust-security/traust-cli/internal/views"
 )
 
+// TestMonitorUpsertStreamsInPlace verifies keyed lines update in place:
+// a streaming part rewrites its line instead of appending fragments.
+func TestMonitorUpsertStreamsInPlace(t *testing.T) {
+	m := newMonitor(MonitorHeader{Skill: "s"}, nil, 100, 30)
+	m.upsertLine("m1:0", "The tar")
+	m.upsertLine("m1:0", "The target is a Go monorepo")
+	m.upsertLine("m1:1", "→ bash  rg -n")
+	m.upsertLine("m1:1", "→ bash  rg -n r.GET router.go")
+	m.pushLine("done line")
+
+	if got := len(m.lines); got != 3 {
+		t.Fatalf("lines = %d (want 3: two streamed + one appended), contents: %v", got, m.lines)
+	}
+	if m.lines[0].text != "The target is a Go monorepo" {
+		t.Errorf("line 0 = %q (want final streamed text)", m.lines[0].text)
+	}
+	if !strings.HasPrefix(m.lines[1].text, "→ bash") || !strings.Contains(m.lines[1].text, "r.GET") {
+		t.Errorf("line 1 = %q (want final tool input)", m.lines[1].text)
+	}
+	if m.lines[2].text != "done line" || m.lines[2].key != "" {
+		t.Errorf("line 2 = %+v (unkeyed appends)", m.lines[2])
+	}
+}
+
 // TestAttachDetachReturnsWhileFeedOpen is the regression test for the
 // detach hang: the monitor must exit when the user quits, even though the
 // journal tailer keeps the feed channel open (the run continues).
