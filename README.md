@@ -69,6 +69,16 @@ or grab a static binary from the [releases](https://github.com/traust-security/t
 (linux/macOS/windows, amd64/arm64, checksummed). The only other thing you
 need is an agent harness you are logged into.
 
+Konflux also publishes the same binary as a signed OCI artifact (linux/amd64,
+with an SBOM, provenance and a signature) for air-gapped and platform use:
+
+```bash
+podman run --rm quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli:latest --version
+```
+
+See [docs/konflux.md](docs/konflux.md) for digest pinning, extracting the
+binary out of the image, and the build and version contract.
+
 ## Commands
 
 | Command | What it does |
@@ -136,6 +146,14 @@ The `catalog check` command compares the embedded standalone profile
 (`internal/catalog/data/standalone.yaml`, seeded from traust's
 docs/standalone-usage.md and model-classes.md) against a traust checkout;
 CI runs it on every push to catch drift.
+
+### Releasing
+
+`VERSION` and `version.args` move together — `make check-version` (part of
+`make check`) fails on drift, and the release workflow fails a tag that is not
+`v$(cat VERSION)`. Konflux builds every push and stamps the same value into
+the binary, the image label and the released tag; see
+[docs/konflux.md](docs/konflux.md).
 
 ## License
 

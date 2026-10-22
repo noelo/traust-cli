@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:best-practices", "github>konflux-ci/mintmaker-presets:cve-automerge-all"],
+  "packageRules": [
+    {
+      "description": "Label all minor, patch, digest and pin updates (any manager, including grouped PRs) with allow-automatic-merge so Prow/Tide merges them once builds and checks are green. Major updates are left for manual review.",
+      "matchUpdateTypes": ["digest", "minor", "patch", "pin", "pinDigest"],
+      "addLabels": ["allow-automatic-merge"]
+    },
+    {
+      "description": "Major updates are never labelled allow-automatic-merge; flag them for manual review.",
+      "matchUpdateTypes": ["major"],
+      "addLabels": ["major-update", "manual-review-required", "area/dependency"]
+    },
+    {
+      "description": "Group GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "minor", "patch", "pinDigest"],
+      "groupName": "GitHub Actions",
+      "groupSlug": "github-actions-traust-cli",
+      "commitMessageSuffix": "in traust-cli"
+    },
+    {
+      "description": "Group Go dependencies minor, patch and digest updates",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["digest", "minor", "patch"],
+      "groupName": "Go dependencies",
+      "groupSlug": "go-dependencies-traust-cli",
+      "commitMessageSuffix": "in traust-cli"
+    },
+    {
+      "description": "Group the Containerfile builder image so the Go toolchain patch level arrives as one reviewable bump; it must stay at or above the go directive in go.mod.",
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["digest", "minor", "patch", "pinDigest"],
+      "groupName": "Containerfile base images",
+      "groupSlug": "containerfile-bases-traust-cli",
+      "commitMessageSuffix": "in traust-cli"
+    },
+    {
+      "description": "Exempt our own traust-security packages and Konflux-built images from the dependency cooldown so releases propagate between repositories immediately.",
+      "matchPackageNames": [
+        "traust-security/**",
+        "github.com/traust-security/**",
+        "quay.io/redhat-user-workloads/source-code-intelligence-tenant/**"
+      ],
+      "minimumReleaseAge": null
+    }
+  ]
+}

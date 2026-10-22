@@ -20,8 +20,10 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race ./...
+      - name: Version files agree
+        run: make check-version
       - name: Build
-        run: go build -ldflags "-s -w" ./cmd/traust-cli
+        run: make build
 
   catalog-drift:
     runs-on: ubuntu-latest
