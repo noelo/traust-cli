@@ -1,0 +1,22 @@
+# The Containerfile builds with -buildvcs=false, so .git is not needed.
+.git/
+.github/
+.tekton/
+.githooks/
+
+# Build and release output never belongs in the context.
+bin/
+dist/
+
+# Test fixtures back the Go test suite, not the binary.
+testdata/
+fixture-*.json
+
+# Repository metadata and docs are not consumed by the build.
+docs/
+*.md
+CODEOWNERS
+.goreleaser.yaml
+renovate.json
+.gitignore
+.containerignore

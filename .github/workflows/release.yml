@@ -17,6 +17,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - name: Verify the tag matches VERSION
+        run: |
+          if [ "v$(cat VERSION)" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match v$(cat VERSION)" >&2
+            exit 1
+          fi
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
