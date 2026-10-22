@@ -191,7 +191,7 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		}
 	}
 
-	before := snapshotArtifacts(root)
+	before := snapshotArtifacts(state)
 
 	// Pre-flight toolchain: skills whose scanners live in a toolchain
 	// profile degrade (thinner evidence, weaker coverage) when the profile
@@ -365,8 +365,8 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 	// the user needs to see when a run dies mid-flight, and skills checkpoint
 	// their state for resume.
 	{
-		after := snapshotArtifacts(root)
-		res.Artifacts = discoverArtifacts(root, before, after)
+		after := snapshotArtifacts(state)
+		res.Artifacts = discoverArtifacts(before, after)
 		validateArtifacts(ctx, opts.API, res.Artifacts, opts.StrictValidation)
 		renderArtifacts(ctx, opts.API, res.Artifacts)
 		for _, a := range res.Artifacts {

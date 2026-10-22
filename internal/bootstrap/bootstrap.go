@@ -146,6 +146,15 @@ func Init(ctx context.Context, opts InitOptions, log LogFn) (*State, error) {
 		}
 	}
 
+	// 4b. Anchor analysis_results inside the managed workspace (set only
+	// when empty): campaign-layout skills resolve their output root through
+	// locations.yaml, and an empty value sends the agent hunting for any
+	// analysis-results checkout it can find. A self-contained workspace
+	// keeps every artifact inside it — and inside artifact discovery.
+	if err := ensureAnalysisResults(state, log); err != nil {
+		log("warning: could not set analysis_results in locations.yaml: %v", err)
+	}
+
 	// 5. Scanner toolchain profile: secure-code-audit by default — it
 	// covers every stage of the default flow (a superset of the vuln-scan
 	// and triage profiles). Already-installed profiles are skipped so
@@ -249,6 +258,45 @@ func versionLess(a, b string) bool {
 		}
 	}
 	return len(pa) < len(pb)
+}
+
+// ensureAnalysisResults sets locations.yaml's analysis_results to the
+// workspace's analysis-results directory when (and only when) it is empty:
+// user-customized values are never touched. The line-oriented edit mirrors
+// the template's simple "key: value" shape.
+func ensureAnalysisResults(state *State, log LogFn) error {
+	path := filepath.Join(state.ConfigHome, "locations.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	want := filepath.Join(state.Workspace, "analysis-results")
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "analysis_results:") {
+			continue
+		}
+		val := strings.TrimPrefix(trimmed, "analysis_results:")
+		if idx := strings.Index(val, "#"); idx >= 0 {
+			val = val[:idx]
+		}
+		val = strings.Trim(strings.TrimSpace(val), "\"'")
+		if val != "" {
+			return nil // user-configured; leave it alone
+		}
+		lines[i] = "analysis_results: " + want
+		out := strings.Join(lines, "\n")
+		if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(want, 0o755); err != nil {
+			return err
+		}
+		log("analysis_results anchored at %s (locations.yaml was empty)", want)
+		return nil
+	}
+	return nil
 }
 
 func gitRun(ctx context.Context, dir string, args ...string) error {

@@ -8,7 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/traust-security/traust-cli/internal/api"
+	"github.com/traust-security/traust-cli/internal/bootstrap"
 )
 
 // Artifact is one output file a run produced or modified.
@@ -84,45 +87,148 @@ type fileStamp struct {
 	mod  int64
 }
 
-// snapshotArtifacts records the .json/.md files at depth one of root (where
-// standalone skills write their outputs), skipping dot-directories.
-func snapshotArtifacts(root string) map[string]fileStamp {
-	out := map[string]fileStamp{}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return out
+// artifactRoots returns every root whose .json/.md outputs are tracked for
+// artifact discovery:
+//
+//  1. the harness root, depth one — the standalone convention
+//     (<repo>-security-audit.json written to the agent's cwd);
+//  2. the findings tree — campaign-layout skills resolve their output root
+//     through locations.yaml's analysis_results and write
+//     findings/<org>/<repo>/<repo>-security-audit.json several levels deep,
+//     so that tree is walked recursively (bounded).
+//
+// A managed workspace points analysis_results inside itself (init sets it
+// when empty), so both conventions resolve inside the workspace.
+func artifactRoots(state *bootstrap.State) []scanRoot {
+	roots := []scanRoot{{path: state.TraustRepo(), recursive: false}}
+	for _, ar := range analysisResultsDirs(state) {
+		if ar != "" {
+			roots = append(roots, scanRoot{path: ar, recursive: true})
+		}
 	}
-	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
+	return roots
+}
+
+// scanRoot is one artifact scan location.
+type scanRoot struct {
+	path      string
+	recursive bool
+}
+
+// analysisResultsDirs resolves candidate findings-tree roots: the
+// locations.yaml analysis_results value (absolute, or relative to the
+// config home) when set, and the workspace default when it exists.
+func analysisResultsDirs(state *bootstrap.State) []string {
+	var out []string
+	if v := locationsAnalysisResults(state.ConfigHome); v != "" {
+		p := v
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(state.ConfigHome, p)
 		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext != ".json" && ext != ".md" {
-			continue
+		out = append(out, p, filepath.Join(p, "findings"))
+	}
+	ws := state.Workspace
+	for _, p := range []string{filepath.Join(ws, "analysis-results"), filepath.Join(state.TraustRepo(), "analysis-results")} {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			out = append(out, p)
 		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		out[e.Name()] = fileStamp{size: info.Size(), mod: info.ModTime().UnixNano()}
 	}
 	return out
 }
 
+// locationsAnalysisResults reads the analysis_results value from a config
+// home's locations.yaml ("" when unset or unreadable).
+func locationsAnalysisResults(configHome string) string {
+	data, err := os.ReadFile(filepath.Join(configHome, "locations.yaml"))
+	if err != nil {
+		return ""
+	}
+	var loc struct {
+		AnalysisResults string `yaml:"analysis_results"`
+	}
+	if err := yaml.Unmarshal(data, &loc); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(loc.AnalysisResults)
+}
+
+// skipDirs are never walked in recursive artifact scans.
+var skipDirs = map[string]bool{
+	".git": true, ".venv": true, ".crush": true, ".claude": true,
+	"node_modules": true, "_manifest": true, "graph": true,
+	"metrics": true, "progress-tracker": true,
+}
+
+// snapshotArtifacts records the .json/.md files under every scan root
+// (recursive roots are walked to a bounded depth). Snapshot keys are
+// absolute paths.
+func snapshotArtifacts(state *bootstrap.State) map[string]fileStamp {
+	out := map[string]fileStamp{}
+	for _, root := range artifactRoots(state) {
+		if root.recursive {
+			walkReports(root.path, 0, 6, out)
+			continue
+		}
+		entries, err := os.ReadDir(root.path)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			if ext := strings.ToLower(filepath.Ext(e.Name())); ext != ".json" && ext != ".md" {
+				continue
+			}
+			if info, err := e.Info(); err == nil {
+				out[filepath.Join(root.path, e.Name())] = fileStamp{size: info.Size(), mod: info.ModTime().UnixNano()}
+			}
+		}
+	}
+	return out
+}
+
+// walkReports collects .json/.md files under dir up to maxDepth.
+func walkReports(dir string, depth, maxDepth int, out map[string]fileStamp) {
+	if depth > maxDepth {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		full := filepath.Join(dir, name)
+		if e.IsDir() {
+			if !strings.HasPrefix(name, ".") && !skipDirs[name] {
+				walkReports(full, depth+1, maxDepth, out)
+			}
+			continue
+		}
+		if ext := strings.ToLower(filepath.Ext(name)); ext != ".json" && ext != ".md" {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			out[full] = fileStamp{size: info.Size(), mod: info.ModTime().UnixNano()}
+		}
+	}
+}
+
 // discoverArtifacts diffs two snapshots and returns new/modified candidates
-// ranked by convention.
-func discoverArtifacts(root string, before, after map[string]fileStamp) []Artifact {
+// ranked by convention. Snapshot keys are absolute paths.
+func discoverArtifacts(before, after map[string]fileStamp) []Artifact {
 	var out []Artifact
-	for name, stamp := range after {
-		prev, existed := before[name]
+	for path, stamp := range after {
+		prev, existed := before[path]
 		if existed && prev == stamp {
 			continue
 		}
-		kind := artifactKind(name)
+		kind := artifactKind(filepath.Base(path))
 		if kind == "" {
 			continue
 		}
-		out = append(out, Artifact{Path: filepath.Join(root, name), Kind: kind})
+		out = append(out, Artifact{Path: path, Kind: kind})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		ri, rj := artifactRank(out[i]), artifactRank(out[j])
