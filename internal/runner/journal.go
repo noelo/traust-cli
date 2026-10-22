@@ -80,6 +80,7 @@ type Event struct {
 	TokensOut int64   `json:"tokens_out,omitempty"`
 	CostUSD   float64 `json:"cost_usd,omitempty"`
 	IsError   bool    `json:"is_error,omitempty"`
+	Key       string  `json:"key,omitempty"`
 }
 
 // Raw records one harness output line verbatim.
@@ -88,10 +89,10 @@ func (j *Journal) Raw(line string) {
 }
 
 // Event records one normalized event.
-func (j *Journal) Event(kind, text, tool string, tokensIn, tokensOut int64, cost float64, isError bool) {
+func (j *Journal) Event(kind, text, tool string, tokensIn, tokensOut int64, cost float64, isError bool, key string) {
 	j.write(journalEntry{
 		TS: nowRFC(), Kind: "event",
-		Event: &Event{Kind: kind, Text: text, Tool: tool, TokensIn: tokensIn, TokensOut: tokensOut, CostUSD: cost, IsError: isError},
+		Event: &Event{Kind: kind, Text: text, Tool: tool, TokensIn: tokensIn, TokensOut: tokensOut, CostUSD: cost, IsError: isError, Key: key},
 	})
 }
 

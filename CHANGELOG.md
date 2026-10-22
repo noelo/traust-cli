@@ -145,3 +145,13 @@ Initial implementation.
 - Error results that arrive with a zero process exit code (claude error
   subtypes, crush run_complete errors) no longer read as successful
   runs; the result's error text is recorded as the harness error.
+- The live monitor now streams instead of showing fragments. Crush
+  rewrites message parts in place as they grow (text fills out, tool
+  inputs stream in) and delivers tool results in separate role=tool
+  messages — the old index-based emit captured each part's first frame
+  (one-line text fragments, tool calls with no input) and dropped every
+  tool result. Parts are now tracked by msgid:partIndex with keyed
+  replace events: the monitor updates the keyed line in place (live
+  streaming text, tool inputs filling in), thinking renders as one
+  growing line, and plain output (attach --no-tty, logs, peek) collapses
+  each part's updates to its final content.

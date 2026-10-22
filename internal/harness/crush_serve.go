@@ -390,7 +390,7 @@ func (s *crushServer) cancelSession(ctx context.Context, wsID, sessID string) {
 // context cancellation, which cancels the remote run first).
 func (s *crushServer) readEvents(ctx context.Context, body io.Reader, wsID, sessID, runID string, emit func(Event)) (SessionResult, error) {
 	result := SessionResult{}
-	seenParts := map[string]int{}
+	partState := map[string]string{}
 
 	reader := bufio.NewReaderSize(body, 64*1024)
 	for {
@@ -415,7 +415,7 @@ func (s *crushServer) readEvents(ctx context.Context, body io.Reader, wsID, sess
 		if !ok || data == "" {
 			continue
 		}
-		if done := s.handleSSE(data, sessID, runID, seenParts, emit, &result); done {
+		if done := s.handleSSE(data, sessID, runID, partState, emit, &result); done {
 			return result, nil
 		}
 	}
@@ -423,7 +423,15 @@ func (s *crushServer) readEvents(ctx context.Context, body io.Reader, wsID, sess
 
 // handleSSE maps one SSE data frame onto normalized events. Returns true
 // when the terminal run_complete for our run arrived.
-func (s *crushServer) handleSSE(data, sessID, runID string, seenParts map[string]int, emit func(Event), result *SessionResult) bool {
+//
+// Crush streams message parts by REPLACEMENT: every "message updated"
+// frame carries the full parts array with parts grown in place (text
+// fragments fill out, tool inputs stream in), and tool results arrive in
+// separate role=tool messages. Parts are therefore tracked by
+// msgid:partIndex key with their last-emitted content, and every change
+// re-emits with the key so renderers update the line in place — live
+// streaming text instead of first-fragment artifacts.
+func (s *crushServer) handleSSE(data, sessID, runID string, partState map[string]string, emit func(Event), result *SessionResult) bool {
 	var envelope struct {
 		Type    string          `json:"type"`
 		Payload json.RawMessage `json:"payload"`
@@ -452,39 +460,53 @@ func (s *crushServer) handleSSE(data, sessID, runID string, seenParts map[string
 		if err := json.Unmarshal(inner.Payload, &msg); err != nil {
 			return false
 		}
-		if msg.Role != "assistant" {
+		// user messages carry the prompt (already known); assistant and
+		// tool messages carry the streamed parts. Tool results live in
+		// role=tool messages — skipping them is why tool output vanished.
+		if msg.Role == "user" {
 			return false
 		}
-		for i := seenParts[msg.ID]; i < len(msg.Parts); i++ {
-			part := msg.Parts[i]
+		for i, part := range msg.Parts {
+			key := msg.ID + ":" + strconv.Itoa(i)
 			switch part.Type {
 			case "text":
 				var p struct {
 					Text   string `json:"text"`
 					Hidden bool   `json:"hidden"`
 				}
-				if json.Unmarshal(part.Data, &p) == nil && p.Text != "" && !p.Hidden {
-					emit(Event{Kind: EventText, Text: p.Text})
+				if json.Unmarshal(part.Data, &p) != nil || p.Hidden || p.Text == "" || p.Text == partState[key] {
+					break
 				}
+				partState[key] = p.Text
+				emit(Event{Kind: EventText, Text: p.Text, Key: key})
 			case "reasoning":
-				// Reasoning parts are rewritten as they grow; emit only the
-				// finished block so the transcript stays signal, not spam.
+				// Thinking streams too; keyed updates keep it one live
+				// line per block instead of a fragment per frame.
 				var p struct {
-					Thinking   string `json:"thinking"`
-					FinishedAt int64  `json:"finished_at"`
+					Thinking string `json:"thinking"`
 				}
-				if json.Unmarshal(part.Data, &p) == nil && p.FinishedAt != 0 && p.Thinking != "" {
-					emit(Event{Kind: EventThinking, Text: p.Thinking})
+				if json.Unmarshal(part.Data, &p) != nil || p.Thinking == "" || p.Thinking == partState[key] {
+					break
 				}
+				partState[key] = p.Thinking
+				emit(Event{Kind: EventThinking, Text: p.Thinking, Key: key})
 			case "tool_call":
 				var p struct {
-					ID    string `json:"id"`
-					Name  string `json:"name"`
-					Input string `json:"input"`
+					ID       string `json:"id"`
+					Name     string `json:"name"`
+					Input    string `json:"input"`
+					Finished bool   `json:"finished"`
 				}
-				if json.Unmarshal(part.Data, &p) == nil && p.Name != "" {
-					emit(Event{Kind: EventToolCall, Tool: p.Name, Text: firstLine(p.Input, 160)})
+				if json.Unmarshal(part.Data, &p) != nil || p.Name == "" {
+					break
 				}
+				display := p.Name + "\x00" + firstLine(p.Input, 160)
+				if display == partState[key] {
+					break
+				}
+				partState[key] = display
+				name, input, _ := strings.Cut(display, "\x00")
+				emit(Event{Kind: EventToolCall, Tool: name, Text: input, Key: key})
 			case "tool_result":
 				// The actual command/scanner output — the bulk of a run's
 				// output. Truncated to keep the transcript readable; the
@@ -498,10 +520,15 @@ func (s *crushServer) handleSSE(data, sessID, runID string, seenParts map[string
 				if json.Unmarshal(part.Data, &p) != nil || p.Content == "" {
 					break
 				}
-				emit(Event{Kind: EventToolResult, Tool: p.Name, Text: truncateBlock(p.Content, 6, 400), IsError: p.IsError})
+				display := truncateBlock(p.Content, 6, 400)
+				if display == partState[key] {
+					break
+				}
+				partState[key] = display
+				emit(Event{Kind: EventToolResult, Tool: p.Name, Text: display, IsError: p.IsError, Key: key})
 			}
 		}
-		seenParts[msg.ID] = len(msg.Parts)
+		return false
 
 	case "session":
 		var sess struct {

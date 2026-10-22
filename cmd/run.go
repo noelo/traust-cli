@@ -203,7 +203,7 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		StrictValidation:     runFlags.strictValidation,
 		DeclareSpend:         true,
 	}
-	res, err := runner.Run(ctx, opts, plainSink{})
+	res, err := runner.Run(ctx, opts, newPlainSink())
 	if err != nil {
 		fatalf(1, "run: %v", err)
 	}
@@ -296,9 +296,17 @@ func warnNote(msg string) {
 }
 
 // plainSink prints run updates as styled plain text (non-TTY or --no-monitor).
-type plainSink struct{}
+// Keyed streaming updates collapse to their final content via keyedRenderer.
+type plainSink struct {
+	events *keyedRenderer
+}
 
-func (plainSink) Progress(msg string) {
+func newPlainSink() *plainSink {
+	return &plainSink{events: newKeyedRenderer(os.Stdout)}
+}
+
+func (p *plainSink) Progress(msg string) {
+	p.events.Flush()
 	styles := theme.Default()
 	style := styles.Accent
 	if strings.HasPrefix(msg, "warning:") || strings.HasPrefix(msg, "note:") {
@@ -310,18 +318,10 @@ func (plainSink) Progress(msg string) {
 	fmt.Println(tui.Wrap(style.Render("› "+msg), tui.TerminalWidth()))
 }
 
-func (plainSink) Event(ev harness.Event) { renderPlainEvent(ev) }
+func (p *plainSink) Event(ev harness.Event) { p.events.Event(ev) }
 
-// renderPlainEvent prints one harness event as styled plain text — shared
-// by the synchronous sink, plain attach and `logs`. The string form lives
-// in renderEventString (peek).
-func renderPlainEvent(ev harness.Event) {
-	if s := renderEventString(ev); s != "" {
-		fmt.Print(s)
-	}
-}
-
-func (plainSink) Raw(line string) {
+func (p *plainSink) Raw(line string) {
+	p.events.Flush()
 	if strings.TrimSpace(line) != "" {
 		fmt.Println(tui.Wrap(theme.Default().Muted.Render("  "+line), tui.TerminalWidth()))
 	}

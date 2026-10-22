@@ -123,7 +123,7 @@ func peekFlow(m *flowManifest, runsDir string) string {
 }
 
 // journalTailLines renders the last n entries of a stream journal as
-// display lines.
+// display lines, collapsing keyed streaming updates to their final content.
 func journalTailLines(path string, n int) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -134,22 +134,26 @@ func journalTailLines(path string, n int) []string {
 	if start < 0 {
 		start = 0
 	}
-	var out []string
+	var buf strings.Builder
+	events := newKeyedRenderer(&buf)
 	for _, line := range lines[start:] {
 		if it, ok := journalLineToItem(line); ok {
 			switch it.Kind {
 			case tui.ItemEvent:
-				if s := renderEventString(it.Event); s != "" {
-					out = append(out, s)
-				}
+				events.Event(it.Event)
 			case tui.ItemRaw:
+				events.Flush()
 				if it.Text != "" {
-					out = append(out, tui.Wrap(theme.Default().Muted.Render("  "+it.Text), tui.TerminalWidth())+"\n")
+					buf.WriteString(tui.Wrap(theme.Default().Muted.Render("  "+it.Text), tui.TerminalWidth()) + "\n")
 				}
 			}
 		}
 	}
-	return out
+	events.Flush()
+	if buf.Len() == 0 {
+		return nil
+	}
+	return []string{buf.String()}
 }
 
 func humanAgeSince(info *RunInfo) string {
