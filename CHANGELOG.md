@@ -122,3 +122,14 @@ Initial implementation.
 - Run ids widened to a 6-hex random suffix: the 4-hex suffix collided
   ~8% of the time once a dozen runs shared a second, and a collision
   meant a shared run directory.
+- Fixed the audit-triage flow failing on a successful audit: campaign-
+  layout skills resolve their output root through locations.yaml and write
+  findings/<org>/<repo>/<repo>-security-audit.json several levels deep —
+  depth-one artifact discovery never saw it. Artifact discovery now also
+  scans the configured findings tree (locations.yaml analysis_results,
+  resolved relative to the config home, plus workspace defaults)
+  recursively, skipping non-report trees (graph, metrics, manifests); and
+  init anchors analysis_results inside the managed workspace when (and
+  only when) it is empty, so a fresh workspace is self-contained instead
+  of sending the agent hunting for any analysis-results checkout it can
+  find.
