@@ -85,7 +85,7 @@ func (c *Crush) RunSession(ctx context.Context, spec *RunSpec, emit func(Event))
 		return SessionResult{}, fmt.Errorf("send prompt: %w", err)
 	}
 
-	return srv.readEvents(ctx, body, wsID, sessID, runID, emit)
+	return srv.readEvents(ctx, body, cancelSSE, wsID, clientID, sessID, runID, emit)
 }
 
 // crushServer owns one `crush server` process (or borrows an external one).
@@ -387,38 +387,170 @@ func (s *crushServer) cancelSession(ctx context.Context, wsID, sessID string) {
 }
 
 // readEvents consumes the SSE stream until run_complete for our run (or
-// context cancellation, which cancels the remote run first).
-func (s *crushServer) readEvents(ctx context.Context, body io.Reader, wsID, sessID, runID string, emit func(Event)) (SessionResult, error) {
+// context cancellation, which cancels the remote run first). The run lives
+// in the SERVER, not the connection: an SSE stream that ends without
+// run_complete (idle reaping, server hiccups) triggers a reconnect with
+// the same client id — part state survives, so replayed snapshots dedup —
+// and if the run finished while disconnected, its final state is recovered
+// from the session record instead of killing a 45-minute run.
+func (s *crushServer) readEvents(ctx context.Context, body io.Reader, closer func(), wsID, clientID, sessID, runID string, emit func(Event)) (SessionResult, error) {
 	result := SessionResult{}
 	partState := map[string]string{}
+	const maxReconnects = 5
 
-	reader := bufio.NewReaderSize(body, 64*1024)
-	for {
+	for attempt := 0; ; attempt++ {
+		done, err := s.consumeEvents(ctx, body, wsID, sessID, runID, partState, emit, &result)
+		if closer != nil {
+			closer()
+			closer = nil
+		}
+		if done {
+			return result, nil
+		}
 		if ctx.Err() != nil {
 			s.cancelSession(ctx, wsID, sessID)
 			result.Cancelled = true
 			return result, nil
 		}
-		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return result, fmt.Errorf("event stream: %w", err)
+		}
+
+		// Unexpected stream end. Did the run finish while we were away?
+		if s.recoverFinishedRun(ctx, wsID, sessID, partState, emit, &result) {
+			return result, nil
+		}
+		if attempt >= maxReconnects {
+			return result, fmt.Errorf("event stream ended without run_complete after %d reconnects", attempt)
+		}
+		select {
+		case <-ctx.Done():
+			s.cancelSession(ctx, wsID, sessID)
+			result.Cancelled = true
+			return result, nil
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		body, closer, err = s.openEvents(ctx, wsID, clientID)
 		if err != nil {
 			if ctx.Err() != nil {
 				s.cancelSession(ctx, wsID, sessID)
 				result.Cancelled = true
 				return result, nil
 			}
-			if errors.Is(err, io.EOF) {
-				return result, fmt.Errorf("event stream ended without run_complete")
-			}
-			return result, fmt.Errorf("event stream: %w", err)
+			return result, fmt.Errorf("reconnect event stream: %w", err)
+		}
+		// Re-assert which session this client is viewing so permission
+		// prompts keep routing to us.
+		s.setCurrentSession(ctx, wsID, clientID, sessID)
+	}
+}
+
+// consumeEvents reads one SSE connection to its end. Returns true when
+// run_complete arrived; io.EOF means the stream ended without it.
+func (s *crushServer) consumeEvents(ctx context.Context, body io.Reader, wsID, sessID, runID string, partState map[string]string, emit func(Event), result *SessionResult) (bool, error) {
+	reader := bufio.NewReaderSize(body, 64*1024)
+	for {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return false, err
 		}
 		data, ok := strings.CutPrefix(strings.TrimRight(line, "\r\n"), "data: ")
 		if !ok || data == "" {
 			continue
 		}
-		if done := s.handleSSE(data, sessID, runID, partState, emit, &result); done {
-			return result, nil
+		if done := s.handleSSE(data, sessID, runID, partState, emit, result); done {
+			return true, nil
 		}
 	}
+}
+
+// recoverFinishedRun checks whether the run completed while the event
+// stream was down: a session that is no longer busy has its final parts
+// replayed through the part mapping (deduped against what was already
+// emitted) and its last assistant text recorded as the result.
+func (s *crushServer) recoverFinishedRun(ctx context.Context, wsID, sessID string, partState map[string]string, emit func(Event), result *SessionResult) bool {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+
+	var sess struct {
+		IsBusy bool `json:"is_busy"`
+	}
+	code, err := s.call(cctx, http.MethodGet, "/v1/workspaces/"+wsID+"/agent/sessions/"+sessID, nil, &sess)
+	if err != nil || code != http.StatusOK {
+		return false // cannot tell; let the reconnect loop try
+	}
+	if sess.IsBusy {
+		return false // still running; reconnecting will resume the stream
+	}
+
+	// Finished while away: replay the session's messages through the part
+	// mapping so the final text and tool results are not lost, and record
+	// the last assistant text as the result.
+	var msgs struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	code, err = s.call(cctx, http.MethodGet, "/v1/workspaces/"+wsID+"/sessions/"+sessID+"/messages", nil, &msgs)
+	if err != nil || code != http.StatusOK {
+		return true // finished; recover what we can
+	}
+	lastText := ""
+	for _, raw := range msgs.Messages {
+		var m struct {
+			ID    string `json:"id"`
+			Role  string `json:"role"`
+			Parts []struct {
+				Type string          `json:"type"`
+				Data json.RawMessage `json:"data"`
+			} `json:"parts"`
+		}
+		if json.Unmarshal(raw, &m) != nil || m.Role == "user" {
+			continue
+		}
+		text := s.replayMessageParts(m.ID, m.Role, m.Parts, partState, emit)
+		if text != "" {
+			lastText = text
+		}
+	}
+	if lastText != "" {
+		result.Text = lastText
+	}
+	return true
+}
+
+// replayMessageParts runs the shared part mapping over a message record,
+// returning the message's final text content.
+func (s *crushServer) replayMessageParts(msgID, role string, parts []struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data"`
+}, partState map[string]string, emit func(Event)) string {
+	wrapper := struct {
+		ID    string `json:"id"`
+		Role  string `json:"role"`
+		Parts []struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		} `json:"parts"`
+	}{ID: msgID, Role: role, Parts: parts}
+	payload, err := json.Marshal(wrapper)
+	if err != nil {
+		return ""
+	}
+	s.handleSSE(`{"type":"message","payload":{"type":"updated","payload":`+string(payload)+`}}`, "", "", partState, emit, &SessionResult{})
+	for i, p := range parts {
+		if p.Type == "text" {
+			var t struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(p.Data, &t) == nil && t.Text != "" && partState[msgID+":"+strconv.Itoa(i)] == t.Text {
+				return t.Text
+			}
+		}
+	}
+	return ""
 }
 
 // handleSSE maps one SSE data frame onto normalized events. Returns true

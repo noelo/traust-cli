@@ -155,3 +155,15 @@ Initial implementation.
   streaming text, tool inputs filling in), thinking renders as one
   growing line, and plain output (attach --no-tty, logs, peek) collapses
   each part's updates to its final content.
+- An SSE stream ending without run_complete no longer kills the run: the
+  crush session lives in the server, not the connection, so the client
+  now reconnects with the same client id (part state survives, replayed
+  snapshots dedup) up to five times — and if the run finished while
+  disconnected, its final state is recovered from the session record
+  instead of failing a 45-minute run with "unexpected EOF".
+- Artifact validation is scoped to reports: skill-internal JSON in the
+  findings tree (triage state, layers, verdict queues) has no report
+  schema and was failing `reporting validate` noisily; it is now recorded
+  as informational. Rendering is scoped to the audit-report family —
+  triage JSONs have no title field and crashed the report renderer; their
+  skills write their own Markdown companions.

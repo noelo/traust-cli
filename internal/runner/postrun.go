@@ -241,14 +241,18 @@ func discoverArtifacts(before, after map[string]fileStamp) []Artifact {
 }
 
 // validateArtifacts routes each artifact through the right engine gate:
-// JSON reports via `reporting validate`, threat models via `reporting lint`.
-// Validation is best-effort per artifact; failures are recorded, not fatal
-// (the run report itself is the source of truth for the failure).
+// REPORT-pattern JSON via `reporting validate`, threat models via
+// `reporting lint`. Other JSON files in the findings tree are skill
+// internals (state, layers, lint queues) that have no report schema —
+// validating them produced spurious FAILs, so they are recorded as
+// informational and not gated. Validation failures on reports are
+// recorded and gate the run; per-artifact errors are never fatal by
+// themselves (the run report is the source of truth).
 func validateArtifacts(ctx context.Context, client api.TraustAPI, artifacts []Artifact, strict bool) {
 	for i := range artifacts {
 		a := &artifacts[i]
 		switch a.Kind {
-		case "report", "json":
+		case "report":
 			res, err := client.ReportingValidate(ctx, a.Path, strict)
 			if err != nil {
 				a.Detail = fmt.Sprintf("validation error: %v", err)
@@ -264,6 +268,11 @@ func validateArtifacts(ctx context.Context, client api.TraustAPI, artifacts []Ar
 			}
 			a.Valid = res.ExitCode == 0
 			a.Detail = firstLines(res.Output(), 3)
+		case "json":
+			// Skill-internal JSON (triage state, layers, verdict queues):
+			// informational, not schema-gated.
+			a.Valid = true
+			a.Detail = "informational (skill-internal, not schema-validated)"
 		default:
 			// Plain markdown companions are not gated.
 			a.Valid = true
@@ -271,13 +280,33 @@ func validateArtifacts(ctx context.Context, client api.TraustAPI, artifacts []Ar
 	}
 }
 
-// renderArtifacts regenerates the Markdown companion for every valid JSON
-// report. Render refusals (e.g. a re-render that would drop filled sections)
-// are recorded on the artifact, not fatal.
+// renderablePatterns are the artifacts `reporting render` knows how to
+// render (the audit-report family). Triage/validation/verification JSONs
+// have different shapes — rendering them crashes the engine's report
+// renderer (no title field) — and their skills write their own Markdown
+// companions.
+var renderablePatterns = []string{
+	"-security-audit.json",
+	"-container-audit.json",
+	"-cloud-config-audit.json",
+}
+
+func isRenderable(path string) bool {
+	for _, p := range renderablePatterns {
+		if strings.HasSuffix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// renderArtifacts regenerates the Markdown companion for every valid,
+// renderable audit report. Render refusals (e.g. a re-render that would
+// drop filled sections) are recorded on the artifact, not fatal.
 func renderArtifacts(ctx context.Context, client api.TraustAPI, artifacts []Artifact) {
 	for i := range artifacts {
 		a := &artifacts[i]
-		if a.Kind != "report" || !a.Valid {
+		if a.Kind != "report" || !a.Valid || !isRenderable(a.Path) {
 			continue
 		}
 		out := strings.TrimSuffix(a.Path, ".json") + ".md"
