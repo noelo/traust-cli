@@ -209,7 +209,7 @@ podman build -f Containerfile.full \
   -t traust-cli-full:dev .
 
 podman run --rm traust-cli-full:dev --version      # stamped version
-podman run --rm traust-cli-full:dev doctor --json  # state, venv, engine-import, toolchain all green
+podman run --rm traust-cli-full:dev doctor --json  # state/venv/engine-import green; see "not baked" below for the two expected non-green items
 podman run --rm traust-cli-full:dev skills --json  # catalog parses, no creds needed
 ```
 
@@ -225,15 +225,21 @@ podman run --rm \
 Mount a volume on `/opt/traust/.traust/cli/runs` to persist run journals
 across containers.
 
-Two things are intentionally not baked, matching upstream's
-`Containerfile.toolchain`:
+`doctor` reports two expected non-green items; both are data the image
+deliberately does not bake, matching upstream's `Containerfile.toolchain`:
 
-- **Deployment config** — `corpus-config.yaml` (which trees/repos your estate
-  analyzes) and the ledger signing key are operator- and estate-specific. The
-  image ships the template `TRAUST_CONFIG_HOME`, so `doctor` reports
-  `corpus-config.yaml: trees is empty` until you provide them (edit the baked
-  config, or mount your own over `/opt/traust/.traust/config`). Everything the
-  image *can* provide — venv, checkout, engine, scanners — is green.
+- **Deployment config (estate)** — `corpus-config.yaml` (which trees/repos your
+  estate analyzes) and the ledger signing key are operator- and estate-specific.
+  The image ships the template `TRAUST_CONFIG_HOME`, so `doctor`'s completeness
+  check errors with `corpus-config.yaml: trees is empty` until you provide them
+  (edit the baked config, or mount your own over `/opt/traust/.traust/config`).
+- **osv-scanner offline DB** — the `secure-code-audit` toolchain check reports
+  `osv-scanner NO DB`. osv-scanner queries the OSV API at runtime, so this is
+  only a gap for air-gapped use; upstream omits the osv DB for the same reason
+  (OSV via API). To bake it for air-gap, extend the image with
+  `python3 -m traust.cli.toolchain fetch-dbs --profile secure-code-audit`. The
+  other six scanners (opengrep, gitleaks, syft, grype — with DB, govulncheck,
+  pip-audit) report green.
 - **Harness credentials** — injected at runtime (env or mounted login).
 
 ### When it fails (full image)

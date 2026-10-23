@@ -50,6 +50,10 @@ FROM registry.access.redhat.com/ubi9/ubi:9.8-1792742206@sha256:217dd5692d369799d
 ARG TRAUST_REF=latest
 ARG PIP_AUDIT_VERSION=2.10.1
 ARG SKIP_GRYPE_DB=0
+# HARNESS is threaded into init so the baked default harness (state.Harness,
+# which `run` uses when --harness is omitted) matches the binary the runtime
+# stage installs. "none" leaves init's own default.
+ARG HARNESS=claude
 
 # HOME is load-bearing: `init` writes the workspace to $HOME/.traust and stores
 # ABSOLUTE paths (venv, uv-managed Python, config home) in state.json. The
@@ -73,9 +77,11 @@ COPY --from=build /out/traust-cli /usr/local/bin/traust-cli
 # STAGE so the single COPY into the runtime stage carries them (no extra layer).
 RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
     && mkdir -p "${HOME}" \
+    && if [ "${HARNESS}" != "none" ]; then HARNESS_ARG="--harness ${HARNESS}"; else HARNESS_ARG=""; fi \
     && /usr/local/bin/traust-cli init --yes \
          --ref "${TRAUST_REF}" \
          --toolchain secure-code-audit \
+         ${HARNESS_ARG} \
     && rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt/traust/.npm \
     && if [ "${SKIP_GRYPE_DB}" = "1" ]; then rm -rf /opt/traust/.cache/grype; fi \
     && chmod -R g=u /opt/traust
