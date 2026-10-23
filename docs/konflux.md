@@ -48,17 +48,19 @@ chmod +x ./traust-cli
 
 (`docker create` / `docker cp` works the same way.)
 
-The image ships the CLI only, not the harness, the managed venv or the agent
-harnesses. Real work inside a container needs `$HOME/.traust` and the harness
-credentials mounted, which is why extraction or GitHub Releases is the normal
-path for interactive use.
+This (slim) image ships the CLI only, not the harness, the managed venv or the
+agent harnesses. Real work inside a container needs `$HOME/.traust` and the
+harness credentials mounted, which is why extraction or GitHub Releases is the
+normal path for interactive use. For a batteries-included alternative that
+needs only harness credentials at runtime, see
+[The self-contained image](#the-self-contained-image-traust-cli-full) below.
 
 ## Version stamping contract
 
 - `VERSION` is the source of truth; `version.args` mirrors it as a single
-  `VERSION=X.Y.Z` line. Both move together.
+  `CLI_VERSION=X.Y.Z` line. Both move together.
 - The PipelineRuns pass `build-args-file: version.args`; the Containerfile's
-  `ARG VERSION` stamps `-X github.com/traust-security/traust-cli/cmd.version`,
+  `ARG CLI_VERSION` stamps `-X github.com/traust-security/traust-cli/cmd.version`,
   the `org.opencontainers.image.version` label, and the release tag.
 - `make check-version` (part of `make check`, and a CI step) rejects drift
   between the two files. `release.yml` rejects a tag that is not
@@ -69,6 +71,12 @@ path for interactive use.
   `traust` harness.
 - Never derive the version from `git describe`: hermetic builds have no `.git`
   (and the Containerfile passes `-buildvcs=false`).
+- The build arg is `CLI_VERSION`, not `VERSION`: the `go-toolset` builder base
+  sets `ENV VERSION=<go patch level>`, and an inherited `ENV` shadows a
+  same-named `ARG` during `${...}` expansion — so an `ARG VERSION` would stamp
+  the Go version into the binary instead of the release version. The
+  non-colliding name is the fix (applies to both `Containerfile` and
+  `Containerfile.full`).
 
 ## Pipeline parameters that are not the UI defaults
 
@@ -96,7 +104,7 @@ the `application`/`component` labels, `output-image`, and
 ```bash
 make check                                  # vet + tests + version gate
 make build && ./bin/traust-cli --version    # stamps VERSION
-podman build --build-arg VERSION="$(cat VERSION)" -t traust-cli:dev .
+podman build --build-arg CLI_VERSION="$(cat VERSION)" -t traust-cli:dev .
 podman run --rm traust-cli:dev --version
 ```
 
@@ -104,7 +112,7 @@ Approximate the hermetic build (after the builder image is present locally) to
 prove nothing reaches the network:
 
 ```bash
-podman build --network=none --build-arg VERSION="$(cat VERSION)" -t traust-cli:dev .
+podman build --network=none --build-arg CLI_VERSION="$(cat VERSION)" -t traust-cli:dev .
 ```
 
 ## Verify a published build
@@ -130,3 +138,109 @@ Then confirm the EC/Conforma result in the Konflux UI and that
 | snyk / shell / unicode checks noisy on fixtures | `sast-target-dirs` defaults to `.` | narrow it to `cmd,internal` |
 | EC fails `labels.required_labels` | a label was dropped from the scratch stage | restore `vendor`, `url`, `release`, `distribution-scope` |
 | EC fails `HasLicense` | license text not at the absolute path | keep `COPY LICENSE /licenses/LICENSE` |
+
+## The self-contained image (traust-cli-full)
+
+`Containerfile.full` builds a second, batteries-included variant that bakes
+every runtime dependency `traust-cli init` normally bootstraps on first use:
+`git`, a uv-managed Python 3.12 venv, the pinned traust checkout, its synced
+engine/ledger/contracts, `TRAUST_CONFIG_HOME`, and the `secure-code-audit`
+scanner toolchain. `traust-cli run` works out of the box — only the agent
+harness credentials are injected at runtime.
+
+It is built by a separate Konflux Component, `traust-cli-full`
+(`.tekton/traust-cli-full-{push,pull-request}.yaml`), and published as:
+
+`quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-full`
+
+The same tag convention and version-stamping contract as the slim image apply.
+
+### Build layout and size
+
+`Containerfile.full` is three stages: `build` compiles the Go binary,
+`assemble` runs `traust-cli init` with the full build toolchain (golang for
+govulncheck, python3.11+pip for pip-audit) and every download cache, and `full`
+copies only the finished `/opt/traust` workspace into a clean runtime base. The
+go-build/uv/dnf caches and the `chown`/`chmod` churn stay in the discarded
+assemble stage, so they never reach the published layers — the single
+`COPY --from=assemble --chown=1001:0` writes the tree once (group-writable modes
+are set in the assemble stage so no post-copy layer duplicates the multi-GB
+tree).
+
+Approximate sizes: **~5 GB** with the grype vulnerability DB baked (default),
+**~2 GB** with `--build-arg SKIP_GRYPE_DB=1` (grype re-fetches the DB at runtime
+when online). The slim image is ~18 MB.
+
+### How it differs from the slim image
+
+| | slim (`Containerfile`) | full (`Containerfile.full`) |
+|---|---|---|
+| Base | `FROM scratch` | `ubi9/ubi` (needs `bash`/`dnf`/`git`) |
+| Contents | one static binary | binary + venv + traust checkout + toolchain (+ optional harness) |
+| CVE surface | Go module graph only | OS + Python + scanners + node — much larger |
+| Hermetic build | `hermetic: "true"`, gomod prefetch | **`hermetic: "false"`, no prefetch** (build clones traust, downloads uv, syncs PyPI, installs scanners/npm) |
+| First-run setup | `traust-cli init` + mount `$HOME/.traust` | none; workspace baked at build time |
+| Reproducibility | fully pinned | pin `TRAUST_REF`, base digest, uv (`0.13.4`); scanner/npm versions float |
+
+Because the assemble stage needs the network, the full PipelineRuns set
+`hermetic: "false"` and leave `prefetch-input` empty. That is a deliberate
+trade — the slim image remains the hermetic, Go-module-only artifact.
+
+### Build args
+
+| Arg | Default | Effect |
+|---|---|---|
+| `CLI_VERSION` | `0.0.0` | stamped via `version.args` (same as slim) |
+| `TRAUST_REF` | `latest` | traust tag/branch to bake; pin to a tag for reproducible releases |
+| `HARNESS` | `claude` | bundle an agent harness binary (`claude`, `codex`, or `none`); `none` also skips installing `nodejs`/`npm`. Credentials are never baked. |
+| `SKIP_GRYPE_DB` | `0` | `1` drops the ~3 GB grype vulnerability DB (grype re-fetches it at runtime when online) for a ~2 GB image. |
+
+`HOME=/opt/traust` is load-bearing: `init` writes the workspace to
+`$HOME/.traust` and stores **absolute** paths (venv, uv-managed Python, config
+home) in `state.json`. Do not override `HOME` when running the image, or state
+resolution breaks.
+
+### Build and smoke-test locally
+
+```bash
+podman build -f Containerfile.full \
+  --build-arg CLI_VERSION="$(cat VERSION)" \
+  --build-arg TRAUST_REF=latest \
+  -t traust-cli-full:dev .
+
+podman run --rm traust-cli-full:dev --version      # stamped version
+podman run --rm traust-cli-full:dev doctor --json  # state, venv, engine-import, toolchain all green
+podman run --rm traust-cli-full:dev skills --json  # catalog parses, no creds needed
+```
+
+A real run needs harness credentials and a mounted target:
+
+```bash
+podman run --rm \
+  -e ANTHROPIC_API_KEY=... \
+  -v "$PWD/target:/work:ro,Z" \
+  traust-cli-full:dev run secure-code-audit /work
+```
+
+Mount a volume on `/opt/traust/.traust/cli/runs` to persist run journals
+across containers.
+
+Two things are intentionally not baked, matching upstream's
+`Containerfile.toolchain`:
+
+- **Deployment config** — `corpus-config.yaml` (which trees/repos your estate
+  analyzes) and the ledger signing key are operator- and estate-specific. The
+  image ships the template `TRAUST_CONFIG_HOME`, so `doctor` reports
+  `corpus-config.yaml: trees is empty` until you provide them (edit the baked
+  config, or mount your own over `/opt/traust/.traust/config`). Everything the
+  image *can* provide — venv, checkout, engine, scanners — is green.
+- **Harness credentials** — injected at runtime (env or mounted login).
+
+### When it fails (full image)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `init` fails with git/dial errors | PipelineRun ran hermetic | keep `hermetic: "false"` and `prefetch-input: ""` on both full PipelineRuns |
+| `venv` / `engine-import` fails at runtime | `HOME` overridden, so baked absolute paths don't resolve | run with the image default `HOME=/opt/traust` |
+| harness `not found in PATH` at run | `HARNESS=none` built, or npm global bin off PATH | rebuild with `HARNESS=claude`, or mount the harness binary and set `TRAUST_CLI_<ID>_BIN` |
+| EC flags the non-hermetic build | full image cannot be hermetic | expected; the slim image is the hermetic artifact |

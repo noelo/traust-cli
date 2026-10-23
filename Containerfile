@@ -15,7 +15,7 @@ USER 0
 # GOTOOLCHAIN=local keeps the build offline-clean: go.mod pins a patch-level
 # minimum, and a builder below it must fail loudly rather than try to download
 # a toolchain inside a hermetic build.
-ARG VERSION=0.0.0
+ARG CLI_VERSION=0.0.0
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local
 
 WORKDIR /src
@@ -23,7 +23,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN go build -buildvcs=false -trimpath \
-      -ldflags "-s -w -X github.com/traust-security/traust-cli/cmd.version=${VERSION}" \
+      -ldflags "-s -w -X github.com/traust-security/traust-cli/cmd.version=${CLI_VERSION}" \
       -o /out/traust-cli ./cmd/traust-cli
 
 # Payload stage — the same OCI artifact convention as traust/Containerfile:
@@ -31,14 +31,14 @@ RUN go build -buildvcs=false -trimpath \
 # there is no base to inherit them from.
 FROM scratch
 
-ARG VERSION=0.0.0
+ARG CLI_VERSION=0.0.0
 
 LABEL name="traust-cli" \
-      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.version="${CLI_VERSION}" \
       summary="traust-cli — one binary for the traust security workflow" \
       description="A statically linked Go CLI that bootstraps the traust harness and drives \
 its skills headlessly through the agent harness of your choice." \
-      version="${VERSION}" \
+      version="${CLI_VERSION}" \
       io.k8s.display-name="traust-cli" \
       io.k8s.description="CLI front door for the traust security workflow" \
       io.openshift.tags="ai,security,cli,agents" \

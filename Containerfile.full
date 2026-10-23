@@ -1,0 +1,155 @@
+# Self-contained ("batteries-included") traust-cli image.
+#
+# Unlike Containerfile (FROM scratch, the binary only), this variant bakes
+# every runtime dependency the CLI bootstraps via `traust-cli init`: git, a
+# uv-managed Python 3.12 venv, the pinned traust checkout, TRAUST_CONFIG_HOME,
+# and the secure-code-audit scanner toolchain. `traust-cli run` works out of
+# the box — only the agent-harness credentials are injected at runtime.
+#
+# This image is deliberately NOT hermetic: the assemble stage clones traust,
+# downloads uv, syncs from PyPI, installs scanners and (optionally) an npm
+# harness. Its Konflux PipelineRuns set hermetic:"false". The slim image in
+# Containerfile stays the Go-module-only, scratch artifact.
+#
+# Three stages keep the published image lean: `build` compiles the binary,
+# `assemble` materializes the workspace with the full build toolchain (and all
+# of its caches), and `full` copies only the finished workspace into a runtime
+# base — so go-build/uv/dnf caches never reach the published layers.
+
+# ── Stage 1: build ───────────────────────────────────────────────────────────
+# The static Go binary, identical to Containerfile's build stage: CGO off,
+# -buildvcs=false (no .git in the build context), version stamped from
+# version.args via the Konflux build-args-file param.
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1792671270@sha256:edb9452603fa48e9882063f001ecd7d322add20f1564a4f05f38f6683be5ea94 AS build
+
+USER 0
+
+# CLI_VERSION, not VERSION: the go-toolset base sets ENV VERSION to the Go patch
+# level, and an inherited ENV shadows a same-named ARG during expansion.
+ARG CLI_VERSION=0.0.0
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -buildvcs=false -trimpath \
+      -ldflags "-s -w -X github.com/traust-security/traust-cli/cmd.version=${CLI_VERSION}" \
+      -o /out/traust-cli ./cmd/traust-cli
+
+# ── Stage 2: assemble ────────────────────────────────────────────────────────
+# Materialize the whole workspace via the binary's own bootstrap path, so the
+# image can never drift from bootstrap.Init. This stage carries the build
+# toolchain (golang for govulncheck's `go install`, python3.11+pip for
+# pip-audit) and every download cache — none of which reach the final image.
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1792742206@sha256:217dd5692d369799d34d09ffb6f5f3404efebc7900834490fdf9ae92fd6721d4 AS assemble
+
+# TRAUST_REF pins the traust checkout; "latest" floats to the newest stable tag.
+# SKIP_GRYPE_DB=1 drops the ~3 GB grype vulnerability DB (grype re-fetches it at
+# runtime when online) for a much smaller image.
+ARG TRAUST_REF=latest
+ARG PIP_AUDIT_VERSION=2.10.1
+ARG SKIP_GRYPE_DB=0
+
+# HOME is load-bearing: `init` writes the workspace to $HOME/.traust and stores
+# ABSOLUTE paths (venv, uv-managed Python, config home) in state.json. The
+# runtime stage pins the same HOME so those paths still resolve.
+ENV HOME=/opt/traust \
+    TRAUST_WORKSPACE=/opt/traust/.traust \
+    UV_PYTHON_INSTALL_DIR=/opt/traust/.traust/uv-python \
+    XDG_CACHE_HOME=/opt/traust/.cache \
+    XDG_DATA_HOME=/opt/traust/.local/share
+
+RUN dnf install -y --setopt=install_weak_deps=False --nodocs \
+        git-core bash tar gzip findutils ca-certificates golang python3.11 python3.11-pip \
+    && dnf clean all && rm -rf /var/cache/dnf
+
+COPY --from=build /out/traust-cli /usr/local/bin/traust-cli
+
+# pip-audit the upstream way (python3.11 -m pip install, matching traust's
+# Containerfile.toolchain); the toolchain installer invoked by `init` checks
+# `command -v pip-audit` first and skips it when present. Then init materializes
+# the workspace; finally drop build caches and set group-writable modes IN THIS
+# STAGE so the single COPY into the runtime stage carries them (no extra layer).
+RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
+    && mkdir -p "${HOME}" \
+    && /usr/local/bin/traust-cli init --yes \
+         --ref "${TRAUST_REF}" \
+         --toolchain secure-code-audit \
+    && rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt/traust/.npm \
+    && if [ "${SKIP_GRYPE_DB}" = "1" ]; then rm -rf /opt/traust/.cache/grype; fi \
+    && chmod -R g=u /opt/traust
+
+# ── Stage 3: full (runtime) ──────────────────────────────────────────────────
+# Only what `run` needs: git/bash, golang (govulncheck shells out to `go` at
+# scan time), python3.11 (pip-audit), the nodejs:22 module (claude requires
+# node >=22), the pip-audit/harness binaries, and one copy of the workspace.
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1792742206@sha256:217dd5692d369799d34d09ffb6f5f3404efebc7900834490fdf9ae92fd6721d4 AS full
+
+ARG CLI_VERSION=0.0.0
+ARG PIP_AUDIT_VERSION=2.10.1
+# HARNESS bundles an agent harness binary (claude by default; "none" bakes no
+# harness and skips nodejs). Credentials are NEVER baked — only the binary is.
+ARG HARNESS=claude
+
+ENV HOME=/opt/traust \
+    TRAUST_WORKSPACE=/opt/traust/.traust \
+    UV_PYTHON_INSTALL_DIR=/opt/traust/.traust/uv-python \
+    XDG_CACHE_HOME=/opt/traust/.cache \
+    XDG_DATA_HOME=/opt/traust/.local/share
+
+LABEL name="traust-cli-full" \
+      org.opencontainers.image.version="${CLI_VERSION}" \
+      summary="traust-cli with every runtime dependency pre-installed" \
+      description="A self-contained traust-cli image: the CLI plus the uv-managed \
+venv, the pinned traust harness checkout, TRAUST_CONFIG_HOME and the \
+secure-code-audit scanner toolchain. Runs traust skills with only harness \
+credentials injected at runtime." \
+      version="${CLI_VERSION}" \
+      io.k8s.display-name="traust-cli-full" \
+      io.k8s.description="Self-contained CLI + harness + toolchain for the traust security workflow" \
+      io.openshift.tags="ai,security,cli,agents" \
+      com.redhat.component="traust-cli-full" \
+      maintainer="Traust maintainers <traust@redhat.com>" \
+      vendor="Red Hat, Inc." \
+      url="https://catalog.redhat.com/en/search?searchType=containers" \
+      release="1" \
+      distribution-scope="private"
+
+# Runtime deps. golang stays: govulncheck loads the target's package graph via
+# `go` at scan time. nodejs:22 only when a harness is bundled.
+RUN dnf install -y --setopt=install_weak_deps=False --nodocs \
+        git-core bash tar gzip findutils ca-certificates golang python3.11 python3.11-pip \
+    && if [ "${HARNESS}" != "none" ]; then \
+         dnf module install -y --setopt=install_weak_deps=False nodejs:22/common; \
+       fi \
+    && dnf clean all && rm -rf /var/cache/dnf
+
+# pip-audit (upstream path again) and the optional harness binary. The harness
+# default maps to the adapter's name (claude -> `claude`); TRAUST_CLI_<ID>_BIN
+# can override at runtime.
+RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
+    && if [ "${HARNESS}" = "claude" ]; then \
+         npm install -g @anthropic-ai/claude-code; \
+       elif [ "${HARNESS}" = "codex" ]; then \
+         npm install -g @openai/codex; \
+       elif [ "${HARNESS}" != "none" ]; then \
+         echo "unsupported HARNESS=${HARNESS}" >&2; exit 1; \
+       fi \
+    && { npm cache clean --force 2>/dev/null || true; }
+
+COPY --from=build /out/traust-cli /usr/local/bin/traust-cli
+
+# The finished workspace, copied once (owner 1001, group 0; group-writable modes
+# were set in the assemble stage) — no post-copy chown/chmod layer to duplicate
+# the multi-GB tree.
+COPY --from=assemble --chown=1001:0 /opt/traust /opt/traust
+
+# Certification tooling (ecosystem-cert-preflight-checks HasLicense) looks for
+# license text at the absolute path /licenses.
+COPY LICENSE /licenses/LICENSE
+
+USER 1001
+WORKDIR /opt/traust
+
+ENTRYPOINT ["/usr/local/bin/traust-cli"]

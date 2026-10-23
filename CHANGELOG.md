@@ -14,6 +14,12 @@ Initial implementation.
   model-floor pre-flight, budget warn/degrade/refuse bands, run journals,
   artifact discovery + schema validation + rendering, and spend declaration.
 - Read-only report browsing (`report`) and ledger views (`ledger`).
+- Two container variants: the slim `FROM scratch` artifact (`Containerfile`,
+  the binary only) and a self-contained image (`Containerfile.full`,
+  published as `traust-cli-full`) that bakes the uv-managed venv, the pinned
+  traust checkout, `TRAUST_CONFIG_HOME` and the `secure-code-audit` toolchain
+  via `init` at build time — `run` works with only harness credentials at
+  runtime. Built by a separate, non-hermetic Konflux component.
 
 ### Fixes from first field use
 
