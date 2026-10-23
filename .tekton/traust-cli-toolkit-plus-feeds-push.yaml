@@ -10,9 +10,9 @@ metadata:
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
   labels:
     appstudio.openshift.io/application: traust
-    appstudio.openshift.io/component: traust-cli-full
+    appstudio.openshift.io/component: traust-cli-toolkit-plus-feeds
     pipelines.appstudio.openshift.io/type: build
-  name: traust-cli-full-on-push
+  name: traust-cli-toolkit-plus-feeds-on-push
   namespace: source-code-intelligence-tenant
 spec:
   params:
@@ -21,9 +21,9 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-full:{{revision}}
+    value: quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-toolkit-plus-feeds:{{revision}}
   - name: dockerfile
-    value: Containerfile.full
+    value: Containerfile.toolkit-plus-feeds
   - name: path-context
     value: .
   - name: prefetch-input
@@ -534,7 +534,7 @@ spec:
     - name: netrc
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline-traust-cli-full
+    serviceAccountName: build-pipeline-traust-cli-toolkit-plus-feeds
   workspaces:
   - name: git-auth
     secret:

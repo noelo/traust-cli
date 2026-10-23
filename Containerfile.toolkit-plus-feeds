@@ -1,17 +1,19 @@
-# Self-contained ("batteries-included") traust-cli image.
+# traust-cli-toolkit-plus-feeds — self-contained, air-gap-ready traust-cli image.
 #
-# Unlike Containerfile (FROM scratch, the binary only), this variant bakes
-# every runtime dependency the CLI bootstraps via `traust-cli init`: git, a
-# uv-managed Python 3.12 venv, the pinned traust checkout, TRAUST_CONFIG_HOME,
-# and the secure-code-audit scanner toolchain. `traust-cli run` works out of
-# the box — only the agent-harness credentials are injected at runtime.
+# Unlike Containerfile (FROM scratch, the binary only), this variant bakes every
+# runtime dependency the CLI bootstraps via `traust-cli init` — git, a uv-managed
+# Python 3.12 venv, the pinned traust checkout, TRAUST_CONFIG_HOME, the
+# secure-code-audit scanner toolchain, an optional agent harness — plus the
+# offline vulnerability feeds (grype DB and the osv-scanner offline databases)
+# so no external lookups are needed. `traust-cli run` works out of the box; only
+# the agent-harness credentials are injected at runtime.
 #
 # This image is deliberately NOT hermetic: the assemble stage clones traust,
-# downloads uv, syncs from PyPI, installs scanners and (optionally) an npm
-# harness. Its Konflux PipelineRuns set hermetic:"false". The slim image in
-# Containerfile stays the Go-module-only, scratch artifact.
+# downloads uv, syncs from PyPI, installs scanners, pulls vuln DBs and
+# (optionally) an npm harness. Its Konflux PipelineRuns set hermetic:"false".
+# The slim image in Containerfile stays the Go-module-only, scratch artifact.
 #
-# Three stages keep the published image lean: `build` compiles the binary,
+# Three stages keep the published image tight: `build` compiles the binary,
 # `assemble` materializes the workspace with the full build toolchain (and all
 # of its caches), and `full` copies only the finished workspace into a runtime
 # base — so go-build/uv/dnf caches never reach the published layers.
@@ -58,11 +60,14 @@ ARG HARNESS=claude
 # HOME is load-bearing: `init` writes the workspace to $HOME/.traust and stores
 # ABSOLUTE paths (venv, uv-managed Python, config home) in state.json. The
 # runtime stage pins the same HOME so those paths still resolve.
+# OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY lives inside the workspace so the osv
+# offline databases download here and travel into the runtime image.
 ENV HOME=/opt/traust \
     TRAUST_WORKSPACE=/opt/traust/.traust \
     UV_PYTHON_INSTALL_DIR=/opt/traust/.traust/uv-python \
     XDG_CACHE_HOME=/opt/traust/.cache \
-    XDG_DATA_HOME=/opt/traust/.local/share
+    XDG_DATA_HOME=/opt/traust/.local/share \
+    OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=/opt/traust/.traust/osv-db
 
 RUN dnf install -y --setopt=install_weak_deps=False --nodocs \
         git-core bash tar gzip findutils ca-certificates golang python3.11 python3.11-pip \
@@ -73,16 +78,55 @@ COPY --from=build /out/traust-cli /usr/local/bin/traust-cli
 # pip-audit the upstream way (python3.11 -m pip install, matching traust's
 # Containerfile.toolchain); the toolchain installer invoked by `init` checks
 # `command -v pip-audit` first and skips it when present. Then init materializes
-# the workspace; finally drop build caches and set group-writable modes IN THIS
-# STAGE so the single COPY into the runtime stage carries them (no extra layer).
+# the workspace (grype DB included).
 RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
     && mkdir -p "${HOME}" \
     && if [ "${HARNESS}" != "none" ]; then HARNESS_ARG="--harness ${HARNESS}"; else HARNESS_ARG=""; fi \
     && /usr/local/bin/traust-cli init --yes \
          --ref "${TRAUST_REF}" \
          --toolchain secure-code-audit \
-         ${HARNESS_ARG} \
-    && rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt/traust/.npm \
+         ${HARNESS_ARG}
+
+# Bake the osv-scanner OFFLINE databases and switch the harness to air-gapped
+# OSV, so dependency pre-scans need no OSV API. osv-scanner only downloads the
+# ecosystems it sees, so we scan a stub with one lockfile per major ecosystem
+# (docs/setup.md "Air-gapped OSV scanning"). The databases land in
+# OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY (inside the workspace) and `feeds.yaml`
+# is flipped to access: air-gapped so the engine runs osv-scanner --offline.
+RUN <<'SCRIPT'
+set -eu
+stub=/tmp/osv-stub
+mkdir -p "$stub"
+printf 'requests==2.20.0\n' > "$stub/requirements.txt"
+printf 'module example.com/m\ngo 1.21\nrequire github.com/gin-gonic/gin v1.6.0\n' > "$stub/go.mod"
+printf '%s\n' '{"name":"s","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"s","version":"1.0.0","dependencies":{"lodash":"4.17.20"}},"node_modules/lodash":{"version":"4.17.20","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz","integrity":"sha512-x"}}}' > "$stub/package-lock.json"
+printf '%s\n' '<project><modelVersion>4.0.0</modelVersion><groupId>a</groupId><artifactId>b</artifactId><version>1</version><dependencies><dependency><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-core</artifactId><version>2.14.0</version></dependency></dependencies></project>' > "$stub/pom.xml"
+printf 'GEM\n  remote: https://rubygems.org/\n  specs:\n    rack (2.0.5)\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  rack\n' > "$stub/Gemfile.lock"
+printf '[[package]]\nname = "time"\nversion = "0.1.42"\n' > "$stub/Cargo.lock"
+printf '%s\n' '{"packages":[{"name":"guzzlehttp/guzzle","version":"6.5.0"}],"packages-dev":[]}' > "$stub/composer.lock"
+printf '%s\n' '{"version":1,"dependencies":{".NETCoreApp,Version=v6.0":{"Newtonsoft.Json":{"type":"Direct","requested":"12.0.0","resolved":"12.0.0","contentHash":"x"}}}}' > "$stub/packages.lock.json"
+# osv-scanner exits non-zero when it finds vulnerabilities (expected); the DB
+# download is the side effect we want, so tolerate that exit and then assert a
+# usable all.zip for every promised ecosystem — one ecosystem succeeding must
+# not mask another failing.
+/opt/traust/.traust/bin/osv-scanner scan source \
+    --offline-vulnerabilities --download-offline-databases "$stub" || true
+for eco in Go Maven NuGet Packagist PyPI RubyGems crates.io npm; do
+    db="/opt/traust/.traust/osv-db/osv-scanner/${eco}/all.zip"
+    test -s "$db" || { echo "osv offline DB missing or empty for ${eco} (${db})" >&2; exit 1; }
+done
+# Flip the osv source to air-gapped so the engine runs osv-scanner --offline
+# against the baked DB instead of the OSV API.
+sed -i '/^  osv:/a\    access: air-gapped' /opt/traust/.traust/config/feeds.yaml
+grep -q 'access: air-gapped' /opt/traust/.traust/config/feeds.yaml \
+    || { echo "failed to set osv access: air-gapped in feeds.yaml" >&2; exit 1; }
+rm -rf "$stub"
+SCRIPT
+
+# Drop build caches and set group-writable modes IN THIS STAGE so the single
+# COPY into the runtime stage carries them (no post-copy layer duplicates the
+# multi-GB tree). The osv/grype DBs under the workspace are kept.
+RUN rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt/traust/.npm \
     && if [ "${SKIP_GRYPE_DB}" = "1" ]; then rm -rf /opt/traust/.cache/grype; fi \
     && chmod -R g=u /opt/traust
 
@@ -98,24 +142,28 @@ ARG PIP_AUDIT_VERSION=2.10.1
 # harness and skips nodejs). Credentials are NEVER baked — only the binary is.
 ARG HARNESS=claude
 
+# OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY points osv-scanner at the baked offline
+# databases so air-gapped runs find them.
 ENV HOME=/opt/traust \
     TRAUST_WORKSPACE=/opt/traust/.traust \
     UV_PYTHON_INSTALL_DIR=/opt/traust/.traust/uv-python \
     XDG_CACHE_HOME=/opt/traust/.cache \
-    XDG_DATA_HOME=/opt/traust/.local/share
+    XDG_DATA_HOME=/opt/traust/.local/share \
+    OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=/opt/traust/.traust/osv-db
 
-LABEL name="traust-cli-full" \
+LABEL name="traust-cli-toolkit-plus-feeds" \
       org.opencontainers.image.version="${CLI_VERSION}" \
-      summary="traust-cli with every runtime dependency pre-installed" \
-      description="A self-contained traust-cli image: the CLI plus the uv-managed \
-venv, the pinned traust harness checkout, TRAUST_CONFIG_HOME and the \
-secure-code-audit scanner toolchain. Runs traust skills with only harness \
-credentials injected at runtime." \
+      summary="traust-cli with the full toolchain, harness and offline vuln feeds" \
+      description="A self-contained, air-gap-ready traust-cli image: the CLI plus \
+the uv-managed venv, the pinned traust harness checkout, TRAUST_CONFIG_HOME, the \
+secure-code-audit scanner toolchain, an agent harness, and the offline \
+vulnerability feeds (grype DB and osv-scanner offline databases). Runs traust \
+skills with only harness credentials injected at runtime." \
       version="${CLI_VERSION}" \
-      io.k8s.display-name="traust-cli-full" \
-      io.k8s.description="Self-contained CLI + harness + toolchain for the traust security workflow" \
+      io.k8s.display-name="traust-cli-toolkit-plus-feeds" \
+      io.k8s.description="Self-contained CLI + harness + scanner toolchain + offline feeds for the traust security workflow" \
       io.openshift.tags="ai,security,cli,agents" \
-      com.redhat.component="traust-cli-full" \
+      com.redhat.component="traust-cli-toolkit-plus-feeds" \
       maintainer="Traust maintainers <traust@redhat.com>" \
       vendor="Red Hat, Inc." \
       url="https://catalog.redhat.com/en/search?searchType=containers" \
@@ -133,7 +181,8 @@ RUN dnf install -y --setopt=install_weak_deps=False --nodocs \
 
 # pip-audit (upstream path again) and the optional harness binary. The harness
 # default maps to the adapter's name (claude -> `claude`); TRAUST_CLI_<ID>_BIN
-# can override at runtime.
+# can override at runtime. Install failures stay fatal; only the cache clean is
+# tolerated.
 RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
     && if [ "${HARNESS}" = "claude" ]; then \
          npm install -g @anthropic-ai/claude-code; \

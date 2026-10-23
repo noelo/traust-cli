@@ -53,7 +53,7 @@ agent harnesses. Real work inside a container needs `$HOME/.traust` and the
 harness credentials mounted, which is why extraction or GitHub Releases is the
 normal path for interactive use. For a batteries-included alternative that
 needs only harness credentials at runtime, see
-[The self-contained image](#the-self-contained-image-traust-cli-full) below.
+[The self-contained image](#the-self-contained-image-traust-cli-toolkit-plus-feeds) below.
 
 ## Version stamping contract
 
@@ -76,7 +76,7 @@ needs only harness credentials at runtime, see
   same-named `ARG` during `${...}` expansion — so an `ARG VERSION` would stamp
   the Go version into the binary instead of the release version. The
   non-colliding name is the fix (applies to both `Containerfile` and
-  `Containerfile.full`).
+  `Containerfile.toolkit-plus-feeds`).
 
 ## Pipeline parameters that are not the UI defaults
 
@@ -139,50 +139,73 @@ Then confirm the EC/Conforma result in the Konflux UI and that
 | EC fails `labels.required_labels` | a label was dropped from the scratch stage | restore `vendor`, `url`, `release`, `distribution-scope` |
 | EC fails `HasLicense` | license text not at the absolute path | keep `COPY LICENSE /licenses/LICENSE` |
 
-## The self-contained image (traust-cli-full)
+## The self-contained image (traust-cli-toolkit-plus-feeds)
 
-`Containerfile.full` builds a second, batteries-included variant that bakes
-every runtime dependency `traust-cli init` normally bootstraps on first use:
-`git`, a uv-managed Python 3.12 venv, the pinned traust checkout, its synced
-engine/ledger/contracts, `TRAUST_CONFIG_HOME`, and the `secure-code-audit`
-scanner toolchain. `traust-cli run` works out of the box — only the agent
-harness credentials are injected at runtime.
+`Containerfile.toolkit-plus-feeds` builds a second, batteries-included,
+air-gap-ready variant that bakes every runtime dependency `traust-cli init`
+normally bootstraps on first use: `git`, a uv-managed Python 3.12 venv, the
+pinned traust checkout, its synced engine/ledger/contracts, `TRAUST_CONFIG_HOME`,
+the `secure-code-audit` scanner toolchain, an optional agent harness, **and the
+offline vulnerability feeds** (the grype DB and the osv-scanner offline
+databases). `traust-cli run` works out of the box with no external vuln lookups
+— only the agent harness credentials are injected at runtime.
 
-It is built by a separate Konflux Component, `traust-cli-full`
-(`.tekton/traust-cli-full-{push,pull-request}.yaml`), and published as:
+It is built by a separate Konflux Component, `traust-cli-toolkit-plus-feeds`
+(`.tekton/traust-cli-toolkit-plus-feeds-{push,pull-request}.yaml`), and published
+as:
 
-`quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-full`
+`quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-toolkit-plus-feeds`
 
 The same tag convention and version-stamping contract as the slim image apply.
 
 ### Build layout and size
 
-`Containerfile.full` is three stages: `build` compiles the Go binary,
-`assemble` runs `traust-cli init` with the full build toolchain (golang for
-govulncheck, python3.11+pip for pip-audit) and every download cache, and `full`
-copies only the finished `/opt/traust` workspace into a clean runtime base. The
-go-build/uv/dnf caches and the `chown`/`chmod` churn stay in the discarded
-assemble stage, so they never reach the published layers — the single
+`Containerfile.toolkit-plus-feeds` is three stages: `build` compiles the Go
+binary, `assemble` runs `traust-cli init` with the full build toolchain (golang
+for govulncheck, python3.11+pip for pip-audit) plus the offline-feed download,
+and `full` copies only the finished `/opt/traust` workspace into a clean runtime
+base. The go-build/uv/dnf caches and the `chown`/`chmod` churn stay in the
+discarded assemble stage, so they never reach the published layers — the single
 `COPY --from=assemble --chown=1001:0` writes the tree once (group-writable modes
 are set in the assemble stage so no post-copy layer duplicates the multi-GB
 tree).
 
-Approximate sizes: **~5 GB** with the grype vulnerability DB baked (default),
-**~2 GB** with `--build-arg SKIP_GRYPE_DB=1` (grype re-fetches the DB at runtime
-when online). The slim image is ~18 MB.
+Approximate sizes: **~5.4 GB** by default (grype DB ~3 GB + osv offline DBs
+~290 MB), **~2.3 GB** with `--build-arg SKIP_GRYPE_DB=1` (keeps the osv DBs,
+drops grype's — grype re-fetches it at runtime when online). The slim image is
+~18 MB.
+
+### Offline vulnerability feeds (air-gap)
+
+This image is the air-gapped answer, so it bakes the feeds the dependency
+pre-scan needs instead of calling out:
+
+- **grype** — its DB is populated by `init` (schema v6) and lives under the
+  workspace cache.
+- **osv-scanner** — osv-scanner only downloads the ecosystems it sees, so the
+  assemble stage scans a stub carrying one lockfile per major ecosystem (PyPI,
+  npm, Go, Maven, RubyGems, crates.io, Packagist, NuGet) with
+  `--download-offline-databases`. The databases (~290 MB) land in
+  `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=/opt/traust/.traust/osv-db` and travel
+  into the runtime image, and `feeds.yaml`'s osv source is flipped to
+  `access: air-gapped` so the engine runs `osv-scanner --offline` against them
+  (docs/setup.md "Air-gapped OSV scanning"). Offline OSV coverage is narrower
+  than the API (no Go stdlib advisories — govulncheck, which carries its own DB,
+  covers Go); refresh the feeds by rebuilding.
 
 ### How it differs from the slim image
 
-| | slim (`Containerfile`) | full (`Containerfile.full`) |
+| | slim (`Containerfile`) | toolkit-plus-feeds (`Containerfile.toolkit-plus-feeds`) |
 |---|---|---|
 | Base | `FROM scratch` | `ubi9/ubi` (needs `bash`/`dnf`/`git`) |
-| Contents | one static binary | binary + venv + traust checkout + toolchain (+ optional harness) |
+| Contents | one static binary | binary + venv + traust checkout + toolchain + offline feeds (+ optional harness) |
 | CVE surface | Go module graph only | OS + Python + scanners + node — much larger |
-| Hermetic build | `hermetic: "true"`, gomod prefetch | **`hermetic: "false"`, no prefetch** (build clones traust, downloads uv, syncs PyPI, installs scanners/npm) |
+| Hermetic build | `hermetic: "true"`, gomod prefetch | **`hermetic: "false"`, no prefetch** (build clones traust, downloads uv, syncs PyPI, installs scanners/npm, pulls vuln DBs) |
 | First-run setup | `traust-cli init` + mount `$HOME/.traust` | none; workspace baked at build time |
-| Reproducibility | fully pinned | pin `TRAUST_REF`, base digest, uv (`0.13.4`); scanner/npm versions float |
+| Vuln lookups | n/a | offline (grype DB + osv-scanner air-gapped DBs baked) |
+| Reproducibility | fully pinned | pin `TRAUST_REF`, base digest, uv (`0.13.4`); scanner/npm/feed versions float |
 
-Because the assemble stage needs the network, the full PipelineRuns set
+Because the assemble stage needs the network, the PipelineRuns set
 `hermetic: "false"` and leave `prefetch-input` empty. That is a deliberate
 trade — the slim image remains the hermetic, Go-module-only artifact.
 
@@ -193,24 +216,24 @@ trade — the slim image remains the hermetic, Go-module-only artifact.
 | `CLI_VERSION` | `0.0.0` | stamped via `version.args` (same as slim) |
 | `TRAUST_REF` | `latest` | traust tag/branch to bake; pin to a tag for reproducible releases |
 | `HARNESS` | `claude` | bundle an agent harness binary (`claude`, `codex`, or `none`); `none` also skips installing `nodejs`/`npm`. Credentials are never baked. |
-| `SKIP_GRYPE_DB` | `0` | `1` drops the ~3 GB grype vulnerability DB (grype re-fetches it at runtime when online) for a ~2 GB image. |
+| `SKIP_GRYPE_DB` | `0` | `1` drops the ~3 GB grype DB (grype re-fetches it at runtime when online); the osv offline DBs are kept. |
 
 `HOME=/opt/traust` is load-bearing: `init` writes the workspace to
 `$HOME/.traust` and stores **absolute** paths (venv, uv-managed Python, config
-home) in `state.json`. Do not override `HOME` when running the image, or state
-resolution breaks.
+home, osv DB) in `state.json`/env. Do not override `HOME` when running the image,
+or state resolution breaks.
 
 ### Build and smoke-test locally
 
 ```bash
-podman build -f Containerfile.full \
+podman build -f Containerfile.toolkit-plus-feeds \
   --build-arg CLI_VERSION="$(cat VERSION)" \
   --build-arg TRAUST_REF=latest \
-  -t traust-cli-full:dev .
+  -t traust-cli-toolkit-plus-feeds:dev .
 
-podman run --rm traust-cli-full:dev --version      # stamped version
-podman run --rm traust-cli-full:dev doctor --json  # state/venv/engine-import green; see "not baked" below for the two expected non-green items
-podman run --rm traust-cli-full:dev skills --json  # catalog parses, no creds needed
+podman run --rm traust-cli-toolkit-plus-feeds:dev --version      # stamped version
+podman run --rm traust-cli-toolkit-plus-feeds:dev doctor --json  # state/venv/engine-import + toolchain green; see "not baked" below
+podman run --rm traust-cli-toolkit-plus-feeds:dev skills --json  # catalog parses, no creds needed
 ```
 
 A real run needs harness credentials and a mounted target:
@@ -219,34 +242,31 @@ A real run needs harness credentials and a mounted target:
 podman run --rm \
   -e ANTHROPIC_API_KEY=... \
   -v "$PWD/target:/work:ro,Z" \
-  traust-cli-full:dev run secure-code-audit /work
+  traust-cli-toolkit-plus-feeds:dev run secure-code-audit /work
 ```
 
 Mount a volume on `/opt/traust/.traust/cli/runs` to persist run journals
 across containers.
 
-`doctor` reports two expected non-green items; both are data the image
-deliberately does not bake, matching upstream's `Containerfile.toolchain`:
+The one expected non-green `doctor` item is deployment config the image
+deliberately does not bake:
 
 - **Deployment config (estate)** — `corpus-config.yaml` (which trees/repos your
   estate analyzes) and the ledger signing key are operator- and estate-specific.
   The image ships the template `TRAUST_CONFIG_HOME`, so `doctor`'s completeness
   check errors with `corpus-config.yaml: trees is empty` until you provide them
   (edit the baked config, or mount your own over `/opt/traust/.traust/config`).
-- **osv-scanner offline DB** — the `secure-code-audit` toolchain check reports
-  `osv-scanner NO DB`. osv-scanner queries the OSV API at runtime, so this is
-  only a gap for air-gapped use; upstream omits the osv DB for the same reason
-  (OSV via API). To bake it for air-gap, extend the image with
-  `python3 -m traust.cli.toolchain fetch-dbs --profile secure-code-audit`. The
-  other six scanners (opengrep, gitleaks, syft, grype — with DB, govulncheck,
-  pip-audit) report green.
 - **Harness credentials** — injected at runtime (env or mounted login).
 
-### When it fails (full image)
+The scanner toolchain reports green, including the osv-scanner offline DB (baked;
+`feeds.yaml` is air-gapped).
+
+### When it fails (toolkit-plus-feeds image)
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `init` fails with git/dial errors | PipelineRun ran hermetic | keep `hermetic: "false"` and `prefetch-input: ""` on both full PipelineRuns |
+| `init` fails with git/dial errors | PipelineRun ran hermetic | keep `hermetic: "false"` and `prefetch-input: ""` on both PipelineRuns |
 | `venv` / `engine-import` fails at runtime | `HOME` overridden, so baked absolute paths don't resolve | run with the image default `HOME=/opt/traust` |
+| `osv-scanner NO DB` at runtime | `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` overridden, or the osv DB layer was stripped | run with the image default env; rebuild to refresh the DB |
 | harness `not found in PATH` at run | `HARNESS=none` built, or npm global bin off PATH | rebuild with `HARNESS=claude`, or mount the harness binary and set `TRAUST_CLI_<ID>_BIN` |
-| EC flags the non-hermetic build | full image cannot be hermetic | expected; the slim image is the hermetic artifact |
+| EC flags the non-hermetic build | this image cannot be hermetic | expected; the slim image is the hermetic artifact |
