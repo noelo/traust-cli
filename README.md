@@ -79,6 +79,20 @@ podman run --rm quay.io/redhat-user-workloads/source-code-intelligence-tenant/tr
 See [docs/konflux.md](docs/konflux.md) for digest pinning, extracting the
 binary out of the image, and the build and version contract.
 
+A second, **self-contained, air-gap-ready image** (`Containerfile.toolkit-plus-feeds`,
+published as `traust-cli-toolkit-plus-feeds`) bakes every runtime dependency
+`init` bootstraps — the uv-managed venv, the pinned traust checkout,
+`TRAUST_CONFIG_HOME`, the `secure-code-audit` toolchain, an agent harness — plus
+the offline vulnerability feeds (grype DB and the osv-scanner offline databases),
+so `traust-cli run` works with only harness credentials injected at runtime, no
+`~/.traust` mount and no external vuln lookups:
+
+```bash
+podman run --rm -e ANTHROPIC_API_KEY=... -v "$PWD/target:/work:ro,Z" \
+  quay.io/redhat-user-workloads/source-code-intelligence-tenant/traust/traust-cli-toolkit-plus-feeds:latest \
+  run secure-code-audit /work
+```
+
 ## Commands
 
 | Command | What it does |

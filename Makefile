@@ -27,8 +27,8 @@ check: build vet test check-version
 check-version:
 	@printf '%s' "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { \
 		printf 'VERSION must be X.Y.Z, got: %s\n' "$(VERSION)"; exit 1; }
-	@grep -qx "VERSION=$(VERSION)" version.args || { \
-		printf 'version.args must contain exactly VERSION=%s\n' "$(VERSION)"; exit 1; }
+	@grep -qx "CLI_VERSION=$(VERSION)" version.args || { \
+		printf 'version.args must contain exactly CLI_VERSION=%s\n' "$(VERSION)"; exit 1; }
 
 clean:
 	rm -rf bin/

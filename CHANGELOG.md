@@ -14,6 +14,15 @@ Initial implementation.
   model-floor pre-flight, budget warn/degrade/refuse bands, run journals,
   artifact discovery + schema validation + rendering, and spend declaration.
 - Read-only report browsing (`report`) and ledger views (`ledger`).
+- Two container variants: the slim `FROM scratch` artifact (`Containerfile`,
+  the binary only) and a self-contained, air-gap-ready image
+  (`Containerfile.toolkit-plus-feeds`, published as `traust-cli-toolkit-plus-feeds`)
+  that bakes the uv-managed venv, the pinned traust checkout, `TRAUST_CONFIG_HOME`,
+  the `secure-code-audit` toolchain, an agent harness, and the offline
+  vulnerability feeds (grype DB + osv-scanner offline databases, with `feeds.yaml`
+  set to air-gapped) via `init` at build time — `run` works with only harness
+  credentials at runtime and no external vuln lookups. Built by a separate,
+  non-hermetic Konflux component.
 
 ### Fixes from first field use
 
