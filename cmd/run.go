@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"io"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -203,7 +204,11 @@ func executeRun(state *bootstrap.State, skill *catalog.Skill, args []string) {
 		StrictValidation:     runFlags.strictValidation,
 		DeclareSpend:         true,
 	}
-	res, err := runner.Run(ctx, opts, newPlainSink())
+	sinkWriter := os.Stdout
+	if runFlags.json {
+		sinkWriter = os.Stderr
+	}
+	res, err := runner.Run(ctx, opts, newPlainSink(sinkWriter))
 	if err != nil {
 		fatalf(1, "run: %v", err)
 	}
@@ -298,11 +303,12 @@ func warnNote(msg string) {
 // plainSink prints run updates as styled plain text (non-TTY or --no-monitor).
 // Keyed streaming updates collapse to their final content via keyedRenderer.
 type plainSink struct {
+	w      io.Writer
 	events *keyedRenderer
 }
 
-func newPlainSink() *plainSink {
-	return &plainSink{events: newKeyedRenderer(os.Stdout)}
+func newPlainSink(w io.Writer) *plainSink {
+	return &plainSink{w: w, events: newKeyedRenderer(w)}
 }
 
 func (p *plainSink) Progress(msg string) {
@@ -315,7 +321,7 @@ func (p *plainSink) Progress(msg string) {
 	if strings.Contains(msg, "failed") || strings.Contains(msg, "refused") {
 		style = styles.Err
 	}
-	fmt.Println(tui.Wrap(style.Render("› "+msg), tui.TerminalWidth()))
+	fmt.Fprintln(p.w, tui.Wrap(style.Render("› "+msg), tui.TerminalWidth()))
 }
 
 func (p *plainSink) Event(ev harness.Event) { p.events.Event(ev) }
@@ -323,7 +329,7 @@ func (p *plainSink) Event(ev harness.Event) { p.events.Event(ev) }
 func (p *plainSink) Raw(line string) {
 	p.events.Flush()
 	if strings.TrimSpace(line) != "" {
-		fmt.Println(tui.Wrap(theme.Default().Muted.Render("  "+line), tui.TerminalWidth()))
+		fmt.Fprintln(p.w, tui.Wrap(theme.Default().Muted.Render("  "+line), tui.TerminalWidth()))
 	}
 }
 
