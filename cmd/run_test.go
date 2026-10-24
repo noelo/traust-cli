@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"github.com/traust-security/traust-cli/internal/harness"
 )
 
 func TestWrapBlockStripsIndentationAndWraps(t *testing.T) {
@@ -35,5 +37,51 @@ func TestWrapBlockPreservesNewlines(t *testing.T) {
 	out := wrapBlock("short one\nshort two", 40)
 	if out != "short one\nshort two" {
 		t.Errorf("short lines should pass through: %q", out)
+	}
+}
+
+func TestPlainSinkWritesToProvidedWriter(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	var buf strings.Builder
+	sink := newPlainSink(&buf)
+
+	// Progress should write to buf, not os.Stdout.
+	sink.Progress("warning: explicit model overrides budget band")
+	if buf.Len() == 0 {
+		t.Fatal("Progress wrote nothing to provided writer")
+	}
+	if !strings.Contains(buf.String(), "warning:") {
+		t.Errorf("Progress output missing warning text: %q", buf.String())
+	}
+
+	buf.Reset()
+
+	// Raw should write to buf.
+	sink.Raw("  some harness stream line")
+	if buf.Len() == 0 {
+		t.Fatal("Raw wrote nothing to provided writer")
+	}
+	if !strings.Contains(buf.String(), "harness stream") {
+		t.Errorf("Raw output missing content: %q", buf.String())
+	}
+
+	buf.Reset()
+
+	// Event (via keyedRenderer) should write to buf on Flush.
+	sink.Event(harness.Event{Kind: harness.EventText, Text: "hello from agent"})
+	sink.events.Flush()
+	if buf.Len() == 0 {
+		t.Fatal("Event wrote nothing to provided writer after Flush")
+	}
+	if !strings.Contains(buf.String(), "hello from agent") {
+		t.Errorf("Event output missing content: %q", buf.String())
+	}
+
+	// Raw with blank line should be suppressed.
+	buf.Reset()
+	sink.Raw("   ")
+	if buf.Len() != 0 {
+		t.Errorf("Raw should suppress blank lines, got: %q", buf.String())
 	}
 }
