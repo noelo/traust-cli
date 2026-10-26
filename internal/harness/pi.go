@@ -144,6 +144,12 @@ func (p *Pi) ParseEvent(line []byte) (Event, bool) {
 			ev.Kind = EventError
 			ev.Text = m.AssistantMessageEvent.Error
 			ev.IsError = true
+		case "thinking_start", "thinking_delta", "thinking_end",
+			"text_start", "text_end", "signature_delta", "toolcall_delta":
+			// Streaming sub-events; the complete blocks arrive on
+			// turn_end. Recognized, ignored — they were leaking as raw
+			// JSON (dozens per turn).
+			return Event{}, true
 		default:
 			if ev.TokensIn == 0 && ev.TokensOut == 0 {
 				return Event{}, false
