@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
-	"io"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
