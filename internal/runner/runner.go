@@ -386,6 +386,9 @@ func Run(ctx context.Context, opts Options, sink Sink) (*RunResult, error) {
 		res.Artifacts = discoverArtifacts(before, after)
 		validateArtifacts(ctx, opts.API, res.Artifacts, opts.StrictValidation)
 		renderArtifacts(ctx, opts.API, res.Artifacts)
+		for _, tree := range registerCorpusTrees(state, res.Artifacts) {
+			sink.Progress(fmt.Sprintf("note: registered corpus tree %s (owned, unassigned business unit) — review ownership in corpus-config.yaml", tree))
+		}
 		for _, a := range res.Artifacts {
 			switch {
 			case a.Kind == "report" && !a.Valid:

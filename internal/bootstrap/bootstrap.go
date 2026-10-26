@@ -169,6 +169,18 @@ func Init(ctx context.Context, opts InitOptions, log LogFn) (*State, error) {
 		}
 		if installed {
 			log("toolchain profile %s already installed — skipping", opts.ToolchainProfile)
+			// A skipped install skips the engine's own doctor pass, so a
+			// stale toolchain (the installer never upgrades in place)
+			// would sail through init silently. Check, warn, don't gate:
+			// `traust-cli doctor` remains the strict verifier.
+			doc := exec.CommandContext(ctx, state.VenvPython(), "-m", "traust.cli", "admin", "toolchain", "doctor", "--profile", opts.ToolchainProfile)
+			doc.Dir = repo
+			doc.Env = state.ChildEnv()
+			doc.Stdout = nil
+			doc.Stderr = nil
+			if err := doc.Run(); err != nil {
+				log("warning: toolchain profile %s is degraded (stale or missing tools) — run `traust-cli doctor` for detail", opts.ToolchainProfile)
+			}
 		} else {
 			log("installing toolchain profile %s", opts.ToolchainProfile)
 			py := state.VenvPython()
