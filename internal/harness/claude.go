@@ -63,9 +63,10 @@ func (c *Claude) ParseEvent(line []byte) (Event, bool) {
 		Subtype string `json:"subtype"`
 		Message *struct {
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-				Name string `json:"name"`
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				Thinking string `json:"thinking"`
+				Name     string `json:"name"`
 			} `json:"content"`
 		} `json:"message"`
 		Result       string  `json:"result"`
@@ -90,6 +91,10 @@ func (c *Claude) ParseEvent(line []byte) (Event, bool) {
 				if block.Text != "" {
 					return Event{Kind: EventText, Text: block.Text}, true
 				}
+			case "thinking":
+				if block.Thinking != "" {
+					return Event{Kind: EventThinking, Text: block.Thinking}, true
+				}
 			case "tool_use":
 				if block.Name == "AskUserQuestion" {
 					return Event{Kind: EventNeedsInput, Tool: block.Name}, true
@@ -98,6 +103,10 @@ func (c *Claude) ParseEvent(line []byte) (Event, bool) {
 			}
 		}
 		return Event{}, false
+	case "system":
+		// Protocol bookkeeping (init, thinking-token estimates): recognized,
+		// ignored — printing them as raw lines was pure noise.
+		return Event{}, true
 	case "result":
 		ev := Event{Kind: EventResult, Text: m.Result, IsError: m.IsError, CostUSD: m.TotalCostUSD}
 		if m.Usage != nil {
