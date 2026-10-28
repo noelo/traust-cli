@@ -125,7 +125,7 @@ printf '%s\n' '{"version":1,"dependencies":{".NETCoreApp,Version=v6.0":{"Newtons
 /opt/traust/.traust/bin/osv-scanner scan source \
     --offline-vulnerabilities --download-offline-databases "$stub" || true
 for eco in Go Maven NuGet Packagist PyPI RubyGems crates.io npm; do
-    db="/opt/traust/.traust/osv-db/osv-scanner/${eco}/all.zip"
+    db="/opt/traust/.traust/osv-db/osv-scalibr/${eco}/all.zip"
     test -s "$db" || { echo "osv offline DB missing or empty for ${eco} (${db})" >&2; exit 1; }
 done
 # Flip the osv source to air-gapped so the engine runs osv-scanner --offline
