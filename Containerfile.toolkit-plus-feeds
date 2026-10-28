@@ -52,6 +52,11 @@ FROM registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f6
 ARG TRAUST_REF=latest
 ARG PIP_AUDIT_VERSION=2.10.1
 ARG SKIP_GRYPE_DB=0
+# OSV_SCANNER_VERSION pins the osv-scanner binary installed for the air-gapped
+# offline database step. Since traust v0.43.0 osv-scanner is adopter-provided
+# (consumers: [] in external-tools.yaml), so the toolchain profile no longer
+# installs it. This image needs it to bake the offline DBs.
+ARG OSV_SCANNER_VERSION=2.7.0
 # HARNESS is threaded into init so the baked default harness (state.Harness,
 # which `run` uses when --harness is omitted) matches the binary the runtime
 # stage installs. "none" leaves init's own default.
@@ -86,6 +91,14 @@ RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
          --ref "${TRAUST_REF}" \
          --toolchain secure-code-audit \
          ${HARNESS_ARG}
+
+# Install osv-scanner directly: since traust v0.43.0 it is adopter-provided
+# (consumers: [] in external-tools.yaml), so the toolchain profile no longer
+# installs it. This air-gapped image is itself the adopter that provides it.
+RUN curl -fsSL "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" \
+        -o /opt/traust/.traust/bin/osv-scanner \
+    && chmod +x /opt/traust/.traust/bin/osv-scanner \
+    && /opt/traust/.traust/bin/osv-scanner --version
 
 # Bake the osv-scanner OFFLINE databases and switch the harness to air-gapped
 # OSV, so dependency pre-scans need no OSV API. osv-scanner only downloads the
@@ -194,6 +207,7 @@ RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
     && { npm cache clean --force 2>/dev/null || true; }
 
 COPY --from=build /out/traust-cli /usr/local/bin/traust-cli
+COPY entrypoint-update-feeds.sh /usr/local/bin/entrypoint-update-feeds.sh
 
 # The finished workspace, copied once (owner 1001, group 0; group-writable modes
 # were set in the assemble stage) — no post-copy chown/chmod layer to duplicate
@@ -207,4 +221,4 @@ COPY LICENSE /licenses/LICENSE
 USER 1001
 WORKDIR /opt/traust
 
-ENTRYPOINT ["/usr/local/bin/traust-cli"]
+ENTRYPOINT ["/usr/local/bin/entrypoint-update-feeds.sh"]
