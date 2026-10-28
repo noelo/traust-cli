@@ -80,7 +80,7 @@ func updateOSV(ctx context.Context, binDir string, state *bootstrap.State, log L
 	// "actually refreshed" from "pre-existing baked DB still there".
 	before := make(map[string]time.Time, len(ecosystems))
 	for _, eco := range ecosystems {
-		db := filepath.Join(dbDir, "osv-scanner", eco, "all.zip")
+		db := filepath.Join(dbDir, "osv-scalibr", eco, "all.zip")
 		if info, err := os.Stat(db); err == nil {
 			before[eco] = info.ModTime()
 		}
@@ -127,7 +127,7 @@ func updateOSV(ctx context.Context, binDir string, state *bootstrap.State, log L
 	stale := 0
 	missing := 0
 	for _, eco := range ecosystems {
-		db := filepath.Join(dbDir, "osv-scanner", eco, "all.zip")
+		db := filepath.Join(dbDir, "osv-scalibr", eco, "all.zip")
 		info, err := os.Stat(db)
 		if err != nil || info.Size() == 0 {
 			missing++

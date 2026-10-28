@@ -125,7 +125,7 @@ func TestUpdateOSV_FailedWithBakedDBs(t *testing.T) {
 	osvDBDir := filepath.Join(state.Workspace, "osv-db")
 
 	// Bake a pre-existing DB with an old mtime.
-	goDir := filepath.Join(osvDBDir, "osv-scanner", "Go")
+	goDir := filepath.Join(osvDBDir, "osv-scalibr", "Go")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestUpdateOSV_ActualRefresh(t *testing.T) {
 	osvDBDir := filepath.Join(state.Workspace, "osv-db")
 
 	// Bake a pre-existing DB with an old mtime.
-	goDir := filepath.Join(osvDBDir, "osv-scanner", "Go")
+	goDir := filepath.Join(osvDBDir, "osv-scalibr", "Go")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestUpdateOSV_ActualRefresh(t *testing.T) {
 
 	// osv-scanner that actually rewrites the DB file (simulates successful download).
 	writeScript(t, binDir, "osv-scanner", `
-db="$OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY/osv-scanner/Go/all.zip"
+db="$OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY/osv-scalibr/Go/all.zip"
 echo "refreshed-content" > "$db"
 exit 1
 `)
