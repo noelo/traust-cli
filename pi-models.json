@@ -1,0 +1,19 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "deepsec": {
+      "baseUrl": "$MODEL_BASE_URL",
+      "api": "openai-completions",
+      "apiKey": "$LLMAPIKEY",
+      "models": [
+        { "id": "Qwen3.6-35B-A3B", "name": "Qwen3.6-35B-A3B", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "deepseek-v4-flash-0731", "name": "deepseek/deepseek-v4-flash-0731", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "ox-alpha", "name": "stealth/ox-alpha", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "ling-3.0-flash", "name": "inclusionai/ling-3.0-flash", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "mimo-v2.5", "name": "xiaomi/mimo-v2.5", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "nemotron-3.5-lightning-30b-a3b", "name": "nvidia/nemotron-3.5-lightning-30b-a3b", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } },
+        { "id": "glm-5.3-flash", "name": "z-ai/glm-5.3-flash", "input": ["text"], "contextWindow": 131072, "maxTokens": 8192, "compat": { "thinkingFormat": "qwen", "supportsReasoningEffort": true } }
+      ]
+    }
+  }
+}
