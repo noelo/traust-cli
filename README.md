@@ -41,6 +41,10 @@ all of that, and adds the pieces the harness documents as gaps:
   `registry models spend` row automatically.
 - **Run journals** — spec, raw stream, normalized events and result under
   `~/.traust/cli/runs/<id>/`.
+- **Corpus registration** — a run that writes artifacts under an
+  unregistered findings tree registers it in `corpus-config.yaml` with
+  safe defaults (the harness's own workflow only closes that loop
+  interactively, via `/corpus-intake`).
 
 ## Harness support
 
@@ -52,9 +56,9 @@ Antigravity (agy) is deferred: it has no headless execution path.
 | claude | `claude -p --output-format stream-json` | ✓ | ✓ | acceptEdits + the skill's `allowed-tools` (fail-closed); `--unsafe-full-permission` for the rest |
 | codex | `codex exec - --json --output-last-message` | ✓ | ✓ | `workspace-write` sandbox, approvals never |
 | pi | `pi --mode json` | ✓ | ✓ | tool grants mapped onto pi's builtin tools |
-| opencode | `opencode run --format json --auto` | partial | — | `--auto` |
-| crush | `crush server` (client mode): workspace + SSE events, clean cancel; falls back to `crush run` | ✓ live | ✓ | workspace permission level; unanswered permission/question requests fail closed (exit 2) |
-| goose | experimental (`TRAUST_CLI_GOOSE_ARGS` overrides the template) | — | — | goose's own configuration |
+| opencode | `opencode run --format json --auto` | ✓ | ✓ | `--auto` |
+| crush | `crush server` (client mode): workspace + SSE events, clean cancel, reconnect on dropped streams (runs survive connection loss); falls back to `crush run` | ✓ live | ✓ | workspace permission level; unanswered permission/question requests fail closed (exit 2) |
+| goose | `goose run -i - --no-session` (prompt on stdin) | — | — | goose's own configuration; its config is treated as authoritative — `OPENAI_API_KEY`/`OPENAI_HOST` from `~/.config/goose/config.yaml` override ambient values (goose reads the key from the environment only) |
 
 Every adapter prints its honest caveats before a run. `--unsafe-full-permission`
 is opt-in and journaled.
@@ -97,11 +101,11 @@ podman run --rm -e ANTHROPIC_API_KEY=... -v "$PWD/target:/work:ro,Z" \
 
 | Command | What it does |
 |---|---|
-| `init` | Bootstrap the managed workspace: pinned uv (checksum-verified, never `curl \| sh`), traust checkout at a stable tag, `uv sync`, `TRAUST_CONFIG_HOME` from templates via `install_traust`, and the `secure-code-audit` scanner toolchain (covers every flow stage; `--toolchain none` skips, already-installed profiles are skipped). Idempotent; nothing is written to your shell profile (use `eval "$(traust-cli env)"` if you want it). |
+| `init` | Bootstrap the managed workspace: pinned uv (checksum-verified, never `curl \| sh`), traust checkout at a stable tag, `uv sync`, `TRAUST_CONFIG_HOME` from templates via `install_traust`, and the `secure-code-audit` scanner toolchain (covers every flow stage; `--toolchain none` skips, already-installed profiles are skipped but re-checked — a stale or missing tool warns instead of failing silently). Idempotent; nothing is written to your shell profile (use `eval "$(traust-cli env)"` if you want it). |
 | `doctor` | CLI checks + `install_traust --doctor`; `--json` for CI. |
 | `update` | Move the pin to a newer tag and re-sync. |
 | `skills` | Catalog parsed from the same SKILL.md frontmatter the harness reads; TUI picker on a TTY, table otherwise; `--json`. |
-| `run [flags] <skill> [args…]` | Compose the SKILL.md into a prompt, pre-flight the model floor, and launch the run **in the background** (a detached worker process that survives the terminal), then attach. `-d/--detach` starts without attaching; `--json`/`--no-monitor` keep synchronous CI semantics. The journal records everything; artifacts are validated and spend declared. |
+| `run [flags] <skill> [args…]` | Compose the SKILL.md into a prompt, pre-flight the model floor, and launch the run **in the background** (a detached worker process that survives the terminal), then attach. Everything after the skill name passes through to the skill verbatim (`run triage report.json --fp-rules org.txt --auto`). `-d/--detach` starts without attaching; `--json`/`--no-monitor` keep synchronous CI semantics. The journal records everything; artifacts are validated and spend declared. |
 | `attach <run>` | Live monitor over a background run: full transcript replay + live tail with thinking, tool calls and tool results. **Ctrl-C detaches without cancelling** (the run keeps going); `x` twice cancels. Works on finished runs too (full replay + result). Non-TTY degrades to a plain tail. |
 | `runs` (`ls`/`ps`) | List runs — running first, then newest — with state (running/done/failed/needs-input/budget-stop/aborted/orphaned), age and tokens; `--json`. |
 | `stop <run>` | Graceful cancel: SIGINT (context-driven teardown: crush cancel endpoint, server shutdown) → SIGTERM → SIGKILL. |
