@@ -59,7 +59,9 @@ ARG SKIP_GRYPE_DB=0
 ARG OSV_SCANNER_VERSION=2.7.0
 # HARNESS is threaded into init so the baked default harness (state.Harness,
 # which `run` uses when --harness is omitted) matches the binary the runtime
-# stage installs. "none" leaves init's own default.
+# stage installs. pi is a first-class adapter (internal/harness/pi.go), so
+# --harness pi is passed through like claude/codex. "none" leaves init's own
+# default.
 ARG HARNESS=claude
 
 # HOME is load-bearing: `init` writes the workspace to $HOME/.traust and stores
@@ -152,7 +154,10 @@ FROM registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f6
 ARG CLI_VERSION=0.0.0
 ARG PIP_AUDIT_VERSION=2.10.1
 # HARNESS bundles an agent harness binary (claude by default; "none" bakes no
-# harness and skips nodejs). Credentials are NEVER baked — only the binary is.
+# harness and skips nodejs). pi bundles @earendil-works/pi-coding-agent plus the
+# pi agent dir: baked skills, an env-driven models.json template written at
+# runtime by pi-setup ($MODEL_BASE_URL only — the key stays $LLMAPIKEY for pi to
+# interpolate). Credentials are NEVER baked — only the binary is.
 ARG HARNESS=claude
 
 # OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY points osv-scanner at the baked offline
@@ -201,6 +206,8 @@ RUN python3.11 -m pip install --no-cache-dir "pip-audit==${PIP_AUDIT_VERSION}" \
          npm install -g @anthropic-ai/claude-code; \
        elif [ "${HARNESS}" = "codex" ]; then \
          npm install -g @openai/codex; \
+       elif [ "${HARNESS}" = "pi" ]; then \
+         npm install -g --ignore-scripts @earendil-works/pi-coding-agent; \
        elif [ "${HARNESS}" != "none" ]; then \
          echo "unsupported HARNESS=${HARNESS}" >&2; exit 1; \
        fi \
@@ -213,6 +220,26 @@ COPY entrypoint-update-feeds.sh /usr/local/bin/entrypoint-update-feeds.sh
 # were set in the assemble stage) — no post-copy chown/chmod layer to duplicate
 # the multi-GB tree.
 COPY --from=assemble --chown=1001:0 /opt/traust /opt/traust
+
+# Pi agent directory (skills + models config) — HARNESS=pi. PI_CODING_AGENT_DIR
+# overrides the default ~/.pi/agent so the baked data is found regardless of the
+# runtime HOME (/opt/traust here); harmless when another harness is bundled
+# (pi is not installed then). Skills: every SKILL.md dir from the baked traust
+# checkout's harnessing tree (stage-nested harnessing/<stage>/<skill> AND
+# cross-cutting harnessing/<skill>) copied flat; Pi discovers SKILL.md dirs
+# recursively. Models: the template is written to models.json at runtime by
+# pi-setup ($MODEL_BASE_URL from the harness credentials Secret — nothing baked
+# in; $LLMAPIKEY stays as-is for pi to interpolate).
+ENV PI_CODING_AGENT_DIR=/opt/pi-agent
+COPY pi-models.json /opt/pi-agent/models.json.tmpl
+COPY pi-setup.sh /usr/local/bin/pi-setup
+RUN if [ "${HARNESS}" = "pi" ]; then \
+      mkdir -p /opt/pi-agent/skills && \
+      find "${TRAUST_WORKSPACE}/traust/harnessing" -mindepth 1 -maxdepth 3 -type d \
+        -exec test -f '{}/SKILL.md' ';' -exec cp -r '{}' /opt/pi-agent/skills/ ';' && \
+      ls /opt/pi-agent/skills/ | head -5; \
+    fi \
+    && chmod -R a+rwX /opt/pi-agent && chmod +x /usr/local/bin/pi-setup
 
 # Certification tooling (ecosystem-cert-preflight-checks HasLicense) looks for
 # license text at the absolute path /licenses.
