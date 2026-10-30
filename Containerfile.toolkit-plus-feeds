@@ -22,7 +22,7 @@
 # The static Go binary, identical to Containerfile's build stage: CGO off,
 # -buildvcs=false (no .git in the build context), version stamped from
 # version.args via the Konflux build-args-file param.
-FROM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1792906297@sha256:c51f0f31cbaa7e91dede6013f636d54fe10dd7d581cfc4cda014ba9d62bcd779 AS build
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1793294290@sha256:cab9089469c52029e4d8a4e9f717e87c51ab22eed448ebcada101b811f97dfe7 AS build
 
 USER 0
 
@@ -44,7 +44,7 @@ RUN go build -buildvcs=false -trimpath \
 # image can never drift from bootstrap.Init. This stage carries the build
 # toolchain (golang for govulncheck's `go install`, python3.11+pip for
 # pip-audit) and every download cache — none of which reach the final image.
-FROM registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a AS assemble
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1793179168@sha256:5f08e80aa970ae77712e75e5e857ac0b396abc900823c4d041c1150a9538a13f AS assemble
 
 # TRAUST_REF pins the traust checkout; "latest" floats to the newest stable tag.
 # SKIP_GRYPE_DB=1 drops the ~3 GB grype vulnerability DB (grype re-fetches it at
@@ -149,7 +149,7 @@ RUN rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt
 # Only what `run` needs: git/bash, golang (govulncheck shells out to `go` at
 # scan time), python3.11 (pip-audit), the nodejs:22 module (claude requires
 # node >=22), the pip-audit/harness binaries, and one copy of the workspace.
-FROM registry.access.redhat.com/ubi9/ubi:9.8-1793004556@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a AS full
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1793179168@sha256:5f08e80aa970ae77712e75e5e857ac0b396abc900823c4d041c1150a9538a13f AS full
 
 ARG CLI_VERSION=0.0.0
 ARG PIP_AUDIT_VERSION=2.10.1
