@@ -1,0 +1,341 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: traust-scan-pipeline
+spec:
+  params:
+  # ── Core ─────────────────────────────────────────────────────────
+  - name: repo-url
+    type: string
+    description: Git repo to scan (any repo, any ref — no inventory needed)
+  - name: revision
+    type: string
+    default: main
+  - name: project-id
+    type: string
+    default: traust-scan-default
+  # ── ① Inventory (docs/parameters.md §1) ──────────────────────────
+  - name: inventory-segment
+    type: string
+    default: adhoc
+    description: Portfolio segment for inventory registration (or adhoc)
+  - name: owners-csv
+    type: string
+    default: ""
+    description: ①⑨ File LOCATION of owners.csv (workspace-relative path) — repo→owner rows
+  - name: corpus-config
+    type: string
+    default: ""
+    description: ① File LOCATION of the corpus-config registration file
+  # ── ② Threat model ───────────────────────────────────────────────
+  - name: model-ref
+    type: string
+    default: deepsec/glm-5.3-flash
+    description: pi model ref for the threat-model run (provider/id from the baked pi models.json; $MODEL_BASE_URL serves it)
+  - name: threat-model-mode
+    type: string
+    default: bootstrap
+    description: ② Mode token (bootstrap|interview|bootstrap-then-interview|review|update|pr)
+  - name: vulns-file
+    type: string
+    default: ""
+    description: ② File LOCATION of past vulnerabilities (CVE list, CSV, markdown pentest report, JSON) — spawns the vuln-file parser sub-agent
+  - name: design-doc
+    type: string
+    default: ""
+    description: ② File LOCATION of the architecture/design doc
+  - name: context-paths
+    type: string
+    default: ""
+    description: ② Comma-separated file LOCATIONs of context docs (API specs, SBOMs, IaC, prior threat models, SAR exports)
+  - name: seed-model
+    type: string
+    default: ""
+    description: ② File LOCATION of a prior threat model to seed interview from
+  # ── ③ Audit ──────────────────────────────────────────────────────
+  - name: product-name
+    type: string
+    default: ""
+    description: ③ Findings-tree product segment (analysis-results/findings/<product>/<repo>/)
+  - name: confidence-pass
+    type: string
+    default: "false"
+    description: ③ Run the LLM confidence pass (needs a model); false = --no-score behaviour
+  # ── ④ Triage ─────────────────────────────────────────────────────
+  - name: findings-path
+    type: string
+    default: ""
+    description: ④ File LOCATION of the security-audit JSON to triage
+  - name: triage-votes
+    type: string
+    default: "3"
+    description: ④ N-vote adversarial verification count
+  - name: fp-rules-file
+    type: string
+    default: ""
+    description: ④ File LOCATION of custom false-positive rules
+  - name: triage-repo
+    type: string
+    default: ""
+    description: ④ Checkout for evidence grounding (defaults to the cloned repo)
+  - name: triage-auto
+    type: string
+    default: "true"
+    description: ④ Skip interactive prompts for batch runs
+  # ── ⑤ Live validation ────────────────────────────────────────────
+  - name: live-target
+    type: string
+    default: ""
+    description: ⑤ Authorized live target — kubeconfig file LOCATION or cluster context; validation fails closed without it
+  - name: lab-target-url
+    type: string
+    default: ""
+    description: ⑤ Lab target URL for browser-exploitable findings (validate-browser-finding)
+  - name: validation-manifest
+    type: string
+    default: ""
+    description: ⑤ File LOCATION of the OLM validation manifest
+  - name: validation-scope
+    type: string
+    default: ""
+    description: ⑤ Authorization scope boundary for live validation
+  # ── ⑥ Fuzzing ────────────────────────────────────────────────────
+  - name: targets-json
+    type: string
+    default: ""
+    description: ⑥ File LOCATION of targets.json (fuzz target id, repo, language, entry points)
+  - name: fuzz-entry-points
+    type: string
+    default: ""
+    description: ⑥ Comma-separated parser/decoder/templater entry points flagged in the audit
+  - name: refuted-register
+    type: string
+    default: ""
+    description: ⑥ File LOCATION of the refuted (FP-dismissed) register — priority fuzz targets
+  # ── ⑦ Remediation ────────────────────────────────────────────────
+  - name: fork-url
+    type: string
+    default: ""
+    description: ⑦ Private fork URL for remediation patches
+  - name: finding-ids
+    type: string
+    default: ""
+    description: ⑦ Comma-separated finding IDs for verify-remediation re-audit
+  # ── ⑧ Report packaging ───────────────────────────────────────────
+  - name: report-findings-dir
+    type: string
+    default: ""
+    description: ⑧ File LOCATION of processed-results findings folders to package
+  - name: drive-sharing-config
+    type: string
+    default: ""
+    description: ⑧ File LOCATION of the Drive sharing plan YAML
+  # ── ⑨ Owners ─────────────────────────────────────────────────────
+  - name: org-structures
+    type: string
+    default: ""
+    description: ⑨ File LOCATION of org repo team structures YAML
+  - name: ldap-server
+    type: string
+    default: ""
+    description: ⑨ LDAP server for owner identity verification (HARNESS_LDAP_SERVER)
+  - name: escalation-contacts
+    type: string
+    default: ""
+    description: ⑨ File LOCATION of escalation contacts (commenter grants, never owner slots)
+  tasks:
+  - name: clone
+    params:
+    - {name: url, value: $(params.repo-url)}
+    - {name: revision, value: $(params.revision)}
+    taskRef:
+      kind: Task
+      name: traust-scan-clone
+    workspaces:
+    - {name: output, workspace: source}
+  - name: deterministic-scan
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [clone]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      stepTemplate:
+        env:
+        - {name: PROJECT_ID, value: $(params.project-id)}
+      steps:
+      - name: scan
+        # Old toolchain image on purpose: it carries the full scanner suite
+        # (gitleaks/opengrep/syft/grype) — the toolkit-plus-feeds image only
+        # has osv-scanner + pip-audit.
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-scan-toolchain:latest
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          # Old image's baked harnessing tree (scanner toolchain rules).
+          RULES=/harness/harnessing/2-scan/secure-code-audit
+          mkdir -p "$WORK"
+          cd "$WORK"
+          echo "=== gitleaks (secrets, working tree) ==="
+          gitleaks detect --source "$REPO" \
+            --config "$RULES/gitleaks-rules/gitleaks-default.toml" \
+            --no-git --report-format json --report-path "$WORK/gitleaks.json" \
+            --exit-code 0 || true
+          echo "=== opengrep SAST ==="
+          opengrep scan --config "$RULES/opengrep-rules" \
+            --json -o "$WORK/opengrep.json" "$REPO" || true
+          echo "=== syft SBOM ==="
+          syft scan "dir:$REPO" -o json > "$WORK/sbom.json" || true
+          echo "=== grype (offline DB) ==="
+          grype "sbom:$WORK/sbom.json" -o json > "$WORK/grype.json" || true
+          echo "=== osv-scanner (offline DB) ==="
+          osv-scanner scan source --offline-vulnerabilities --format json \
+            -r "$REPO" > "$WORK/osv.json" || true
+          if [ -f "$REPO/requirements.txt" ]; then
+            echo "=== pip-audit ==="
+            pip-audit -r "$REPO/requirements.txt" -f json > "$WORK/pip-audit.json" || true
+          fi
+          if [ -f "$REPO/go.mod" ]; then
+            echo "=== govulncheck ==="
+            cd "$REPO" && govulncheck -json ./... > "$WORK/govulncheck.json" || true
+          fi
+          echo "=== findings ==="
+          ls -la "$WORK"
+          for f in "$WORK"/*.json; do
+            printf '%s: %s bytes\n' "$(basename "$f")" "$(stat -c%s "$f")"
+          done
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  - name: threat-model
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [clone]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      steps:
+      - name: threat-model
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        envFrom:
+        - secretRef:
+            name: tmm-llm-access
+        env:
+        - {name: MODEL_REF, value: $(params.model-ref)}
+        - {name: VULNS_FILE, value: $(params.vulns-file)}
+        - {name: DESIGN_DOC, value: $(params.design-doc)}
+        - {name: CONTEXT_PATHS, value: $(params.context-paths)}
+        - {name: SEED_MODEL, value: $(params.seed-model)}
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          mkdir -p "$WORK"
+          cd "$REPO"
+          CONFIG_HOME="${TRAUST_CONFIG_HOME:-$TRAUST_WORKSPACE/config}"
+          echo "=== threat-model via traust-cli run --harness pi ($(params.threat-model-mode) mode) ==="
+          pi-setup > /dev/null
+          # Artifacts land in the PVC: point analysis_results at the work dir.
+          printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          # The MAAS endpoint pins its model in the URL path (…/<model>/v1).
+          # The baked models.json id (glm-5.3-flash) 404s against it — align
+          # the request id and the --model ref to the endpoint's model.
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "model: $MODEL_REF -> endpoint model: $ENDPOINT_MODEL"
+          # File params are workspace-relative LOCATIONs; resolve to absolute paths.
+          WS="$(workspaces.source.path)"
+          FLAGS=""
+          if [ -n "$VULNS_FILE" ]; then
+            case "$VULNS_FILE" in /*) VULNS="$VULNS_FILE";; *) VULNS="$WS/$VULNS_FILE";; esac
+            FLAGS="$FLAGS --vulns $VULNS"
+          fi
+          if [ -n "$DESIGN_DOC" ]; then
+            case "$DESIGN_DOC" in /*) DOC="$DESIGN_DOC";; *) DOC="$WS/$DESIGN_DOC";; esac
+            FLAGS="$FLAGS --design-doc $DOC"
+          fi
+          if [ -n "$CONTEXT_PATHS" ]; then
+            CTX=""
+            for p in ${CONTEXT_PATHS//,/ }; do
+              case "$p" in /*) CTX="$CTX,$p";; *) CTX="$CTX,$WS/$p";; esac
+            done
+            FLAGS="$FLAGS --context ${CTX#,}"
+          fi
+          if [ -n "$SEED_MODEL" ]; then
+            case "$SEED_MODEL" in /*) SEED="$SEED_MODEL";; *) SEED="$WS/$SEED_MODEL";; esac
+            FLAGS="$FLAGS --seed $SEED"
+          fi
+          timeout 1500 traust-cli run \
+            --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
+            threat-model "$(params.threat-model-mode)" "$REPO" $FLAGS || true
+          TM=$(ls -t "$REPO"/*-threat-model.md 2>/dev/null | head -1)
+          if [ -n "$TM" ]; then
+            cp "$TM" "$WORK/"
+            echo "threat model: $(basename "$TM") ($(stat -c%s "$TM") bytes)"
+          else
+            echo "WARNING: no *-threat-model.md produced"
+          fi
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  - name: upload
+    params:
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [deterministic-scan, threat-model]
+    taskSpec:
+      params:
+      - {name: project-id, type: string}
+      stepTemplate:
+        env:
+        - {name: MINIO_USER, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_user}}}
+        - {name: MINIO_PASSWORD, valueFrom: {secretKeyRef: {name: minio-secret, key: minio_root_password}}}
+        - {name: MINIO_ENDPOINT, value: http://minio-service:9000}
+        - name: REPORTS_DIR
+          value: $(workspaces.source.path)/work/$(params.project-id)
+      steps:
+      - name: upload
+        # Old toolchain image on purpose: boto3 is baked there; the
+        # traust-cli-toolkit-plus-feeds venv does not carry boto3.
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-scan-toolchain:latest
+        script: |-
+          set -e
+          ls -la "$REPORTS_DIR"
+          python3.11 - <<'PYEOF'
+          import os, glob, boto3
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["MINIO_ENDPOINT"],
+              aws_access_key_id=os.environ["MINIO_USER"],
+              aws_secret_access_key=os.environ["MINIO_PASSWORD"],
+          )
+          bucket = "reports"
+          try:
+              s3.head_bucket(Bucket=bucket)
+          except Exception:
+              s3.create_bucket(Bucket=bucket)
+          prefix = "$(params.project-id)"
+          count = 0
+          for f in sorted(glob.glob(os.path.join(os.environ["REPORTS_DIR"], "*"))):
+              if os.path.isfile(f):
+                  key = f"{prefix}/{os.path.basename(f)}"
+                  s3.upload_file(f, bucket, key)
+                  print(f"uploaded {key} ({os.path.getsize(f)} bytes)")
+                  count += 1
+          print(f"=== uploaded {count} report files to s3://{bucket}/{prefix}/ ===")
+          PYEOF
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  workspaces:
+  - name: source

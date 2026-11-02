@@ -1,0 +1,157 @@
+# traust-basic — minimal scan pipeline: clone a repo and run the
+# threat-model (pi agent via traust-cli) and secure-code-audit
+# (deterministic scanner suite) steps. Artifacts land in the workspace
+# PVC under work/traust-basic. No upload stage — retrieve results from
+# the PVC or add an upload task when needed.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: traust-basic
+spec:
+  description: |-
+    Clone a repo and process it with the threat-model step (pi agent via
+    traust-cli run --harness pi) and the secure-code-audit step
+    (gitleaks/opengrep/syft/grype/osv/pip-audit/govulncheck against the
+    baked toolchain rules). Both run in parallel after the clone.
+  params:
+  - name: repo-url
+    type: string
+    description: Git repo URL to clone and process
+  - name: revision
+    type: string
+    default: main
+    description: Git revision to clone (branch, tag or SHA)
+  - name: model-name
+    type: string
+    default: vllm/glm-5.3-flash
+    description: Model ref for the threat-model run; the provider part is normalized to the baked pi provider (deepsec)
+  - name: project-id
+    type: string
+    default: traust-basic
+    description: Work-directory name under the PVC for this scan's artifacts
+  workspaces:
+  - name: source
+  tasks:
+  - name: clone
+    params:
+    - {name: url, value: $(params.repo-url)}
+    - {name: revision, value: $(params.revision)}
+    taskRef:
+      kind: Task
+      name: traust-scan-clone
+    workspaces:
+    - {name: output, workspace: source}
+  - name: secure-code-audit
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [clone]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      steps:
+      - name: scan
+        # Old toolchain image on purpose: it carries the full scanner suite
+        # (gitleaks/opengrep/syft/grype) — the toolkit-plus-feeds image only
+        # has osv-scanner + pip-audit.
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-scan-toolchain:latest
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          # Old image's baked harnessing tree (scanner toolchain rules).
+          RULES=/harness/harnessing/2-scan/secure-code-audit
+          mkdir -p "$WORK"
+          cd "$WORK"
+          echo "=== gitleaks (secrets, working tree) ==="
+          gitleaks detect --source "$REPO" \
+            --config "$RULES/gitleaks-rules/gitleaks-default.toml" \
+            --no-git --report-format json --report-path "$WORK/gitleaks.json" \
+            --exit-code 0 || true
+          echo "=== opengrep SAST ==="
+          opengrep scan --config "$RULES/opengrep-rules" \
+            --json -o "$WORK/opengrep.json" "$REPO" || true
+          echo "=== syft SBOM ==="
+          syft scan "dir:$REPO" -o json > "$WORK/sbom.json" || true
+          echo "=== grype (offline DB) ==="
+          grype "sbom:$WORK/sbom.json" -o json > "$WORK/grype.json" || true
+          echo "=== osv-scanner (offline DB) ==="
+          osv-scanner scan source --offline-vulnerabilities --format json \
+            -r "$REPO" > "$WORK/osv.json" || true
+          if [ -f "$REPO/requirements.txt" ]; then
+            echo "=== pip-audit ==="
+            pip-audit -r "$REPO/requirements.txt" -f json > "$WORK/pip-audit.json" || true
+          fi
+          if [ -f "$REPO/go.mod" ]; then
+            echo "=== govulncheck ==="
+            cd "$REPO" && govulncheck -json ./... > "$WORK/govulncheck.json" || true
+          fi
+          echo "=== findings ==="
+          ls -la "$WORK"
+          for f in "$WORK"/*.json; do
+            printf '%s: %s bytes\n' "$(basename "$f")" "$(stat -c%s "$f")"
+          done
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  - name: threat-model
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    - {name: model-name, value: $(params.model-name)}
+    runAfter: [clone]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      - {name: model-name, type: string}
+      steps:
+      - name: threat-model
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        envFrom:
+        - secretRef:
+            name: tmm-llm-access
+        env:
+        - {name: MODEL_NAME, value: $(params.model-name)}
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          mkdir -p "$WORK"
+          cd "$REPO"
+          CONFIG_HOME="${TRAUST_CONFIG_HOME:-$TRAUST_WORKSPACE/config}"
+          echo "=== threat-model via traust-cli run --harness pi (bootstrap mode) ==="
+          pi-setup > /dev/null
+          # Artifacts land in the PVC: point analysis_results at the work dir.
+          printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          # The baked pi models.json exposes one provider: deepsec (baseUrl =
+          # $MODEL_BASE_URL, typically a vLLM endpoint). Normalize any other
+          # provider prefix to it, keeping the model id.
+          # The MAAS endpoint pins its model in the URL path (…/<model>/v1).
+          # The baked models.json id (glm-5.3-flash) 404s against it — align
+          # the request id and the --model ref to the endpoint's model.
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "model: $MODEL_NAME -> $MODEL_REF (endpoint model: $ENDPOINT_MODEL)"
+          # CLI flags must precede the skill name (git-style passthrough:
+          # SetInterspersed(false) — everything after the skill name is
+          # passed to the skill verbatim).
+          timeout 1500 traust-cli run \
+            --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
+            threat-model bootstrap "$REPO" || true
+          TM=$(ls -t "$REPO"/*-threat-model.md 2>/dev/null | head -1)
+          if [ -n "$TM" ]; then
+            cp "$TM" "$WORK/"
+            echo "threat model: $(basename "$TM") ($(stat -c%s "$TM") bytes)"
+          else
+            echo "WARNING: no *-threat-model.md produced"
+          fi
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
