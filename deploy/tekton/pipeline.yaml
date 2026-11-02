@@ -167,14 +167,17 @@ spec:
         - {name: PROJECT_ID, value: $(params.project-id)}
       steps:
       - name: scan
-        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        # Old toolchain image on purpose: it carries the full scanner suite
+        # (gitleaks/opengrep/syft/grype) — the toolkit-plus-feeds image only
+        # has osv-scanner + pip-audit.
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-scan-toolchain:latest
         script: |-
           set -e
           export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
           REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
           WORK="$(workspaces.source.path)/work/$(params.project-id)"
-          # Baked traust checkout's toolchain rules (TRAUST_WORKSPACE env in the image).
-          RULES="$TRAUST_WORKSPACE/traust/harnessing/2-scan/secure-code-audit"
+          # Old image's baked harnessing tree (scanner toolchain rules).
+          RULES=/harness/harnessing/2-scan/secure-code-audit
           mkdir -p "$WORK"
           cd "$WORK"
           echo "=== gitleaks (secrets, working tree) ==="
@@ -242,6 +245,13 @@ spec:
           pi-setup > /dev/null
           # Artifacts land in the PVC: point analysis_results at the work dir.
           printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          # The MAAS endpoint pins its model in the URL path (…/<model>/v1).
+          # The baked models.json id (glm-5.3-flash) 404s against it — align
+          # the request id and the --model ref to the endpoint's model.
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "model: $MODEL_REF -> endpoint model: $ENDPOINT_MODEL"
           # File params are workspace-relative LOCATIONs; resolve to absolute paths.
           WS="$(workspaces.source.path)"
           FLAGS=""
@@ -264,9 +274,9 @@ spec:
             case "$SEED_MODEL" in /*) SEED="$SEED_MODEL";; *) SEED="$WS/$SEED_MODEL";; esac
             FLAGS="$FLAGS --seed $SEED"
           fi
-          timeout 1500 traust-cli run threat-model \
+          timeout 1500 traust-cli run \
             --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
-            "$(params.threat-model-mode)" "$REPO" $FLAGS || true
+            threat-model "$(params.threat-model-mode)" "$REPO" $FLAGS || true
           TM=$(ls -t "$REPO"/*-threat-model.md 2>/dev/null | head -1)
           if [ -n "$TM" ]; then
             cp "$TM" "$WORK/"
