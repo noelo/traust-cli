@@ -44,7 +44,7 @@ RUN go build -buildvcs=false -trimpath \
 # image can never drift from bootstrap.Init. This stage carries the build
 # toolchain (golang for govulncheck's `go install`, python3.11+pip for
 # pip-audit) and every download cache — none of which reach the final image.
-FROM registry.access.redhat.com/ubi9/ubi:9.8-1793179168@sha256:5f08e80aa970ae77712e75e5e857ac0b396abc900823c4d041c1150a9538a13f AS assemble
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1793580630@sha256:8f989cc9270da6abec0144c22846ed1e6e92e462dc7768ce0981c4ac1d574733 AS assemble
 
 # TRAUST_REF pins the traust checkout; "latest" floats to the newest stable tag.
 # SKIP_GRYPE_DB=1 drops the ~3 GB grype vulnerability DB (grype re-fetches it at
@@ -147,7 +147,7 @@ RUN rm -rf /opt/traust/.cache/go-build /opt/traust/.cache/uv /opt/traust/go /opt
 # Only what `run` needs: git/bash, golang (govulncheck shells out to `go` at
 # scan time), python3.11 (pip-audit), the nodejs:22 module (claude requires
 # node >=22), the pip-audit/harness binaries, and one copy of the workspace.
-FROM registry.access.redhat.com/ubi9/ubi:9.8-1793179168@sha256:5f08e80aa970ae77712e75e5e857ac0b396abc900823c4d041c1150a9538a13f AS full
+FROM registry.access.redhat.com/ubi9/ubi:9.8-1793580630@sha256:8f989cc9270da6abec0144c22846ed1e6e92e462dc7768ce0981c4ac1d574733 AS full
 
 ARG CLI_VERSION=0.0.0
 ARG PIP_AUDIT_VERSION=2.10.1
