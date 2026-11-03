@@ -288,10 +288,179 @@ spec:
       - name: source
     workspaces:
     - {name: source, workspace: source}
+  - name: triage
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [deterministic-scan, threat-model]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      steps:
+      - name: triage
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        envFrom:
+        - secretRef:
+            name: tmm-llm-access
+        env:
+        - {name: MODEL_REF, value: $(params.model-ref)}
+        - {name: FINDINGS_PATH, value: $(params.findings-path)}
+        - {name: TRIAGE_VOTES, value: $(params.triage-votes)}
+        - {name: FP_RULES_FILE, value: $(params.fp-rules-file)}
+        - {name: TRIAGE_AUTO, value: $(params.triage-auto)}
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          export WORK
+          mkdir -p "$WORK"
+          CONFIG_HOME="${TRAUST_CONFIG_HOME:-$TRAUST_WORKSPACE/config}"
+          printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          pi-setup > /dev/null
+          # Model id alignment (same as threat-model): the MAAS endpoint pins
+          # its model in the URL path; align the request id and the ref.
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "triage: model $MODEL_REF (endpoint model: $ENDPOINT_MODEL)"
+          WS="$(workspaces.source.path)"
+          # ④ findings: default to the ③ deterministic-scan outputs in WORK.
+          FINDINGS="$WORK"
+          if [ -n "$FINDINGS_PATH" ]; then
+            case "$FINDINGS_PATH" in /*) FINDINGS="$FINDINGS_PATH";; *) FINDINGS="$WS/$FINDINGS_PATH";; esac
+          fi
+          # CLI flags before the skill name; skill flags after it.
+          FLAGS=""
+          if [ "$TRIAGE_AUTO" = "true" ]; then FLAGS="$FLAGS --auto"; fi
+          if [ -n "$TRIAGE_VOTES" ]; then FLAGS="$FLAGS --votes $TRIAGE_VOTES"; fi
+          if [ -n "$FP_RULES_FILE" ]; then
+            case "$FP_RULES_FILE" in /*) FPR="$FP_RULES_FILE";; *) FPR="$WS/$FP_RULES_FILE";; esac
+            FLAGS="$FLAGS --fp-rules $FPR"
+          fi
+          timeout 1500 traust-cli run \
+            --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
+            triage "$FINDINGS" --repo "$REPO" $FLAGS || true
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  - name: validate
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [triage]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      steps:
+      - name: validate
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        envFrom:
+        - secretRef:
+            name: tmm-llm-access
+        env:
+        - {name: MODEL_REF, value: $(params.model-ref)}
+        - {name: LIVE_TARGET, value: $(params.live-target)}
+        - {name: LAB_TARGET_URL, value: $(params.lab-target-url)}
+        - {name: VALIDATION_MANIFEST, value: $(params.validation-manifest)}
+        - {name: VALIDATION_SCOPE, value: $(params.validation-scope)}
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          export WORK
+          mkdir -p "$WORK"
+          CONFIG_HOME="${TRAUST_CONFIG_HOME:-$TRAUST_WORKSPACE/config}"
+          printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          pi-setup > /dev/null
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "validate: model $MODEL_REF (endpoint model: $ENDPOINT_MODEL)"
+          WS="$(workspaces.source.path)"
+          FLAGS=""
+          if [ -n "$VALIDATION_SCOPE" ]; then
+            case "$VALIDATION_SCOPE" in /*) SCOPE="$VALIDATION_SCOPE";; *) SCOPE="$WS/$VALIDATION_SCOPE";; esac
+            FLAGS="$FLAGS --scope $SCOPE"
+          fi
+          if [ -n "$LIVE_TARGET" ]; then FLAGS="$FLAGS --live-target $LIVE_TARGET"; fi
+          if [ -n "$LAB_TARGET_URL" ]; then FLAGS="$FLAGS --lab-target $LAB_TARGET_URL"; fi
+          if [ -n "$VALIDATION_MANIFEST" ]; then
+            case "$VALIDATION_MANIFEST" in /*) MAN="$VALIDATION_MANIFEST";; *) MAN="$WS/$VALIDATION_MANIFEST";; esac
+            FLAGS="$FLAGS --manifest $MAN"
+          fi
+          if [ -z "$LIVE_TARGET" ]; then
+            echo "WARNING: no live-target authorized — validate-findings runs fail-closed on the scope guard"
+          fi
+          timeout 1500 traust-cli run \
+            --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
+            validate-findings "$REPO" $FLAGS || true
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
+  - name: fuzz
+    params:
+    - {name: repo-name, value: $(tasks.clone.results.repo-name)}
+    - {name: project-id, value: $(params.project-id)}
+    runAfter: [validate]
+    taskSpec:
+      params:
+      - {name: repo-name, type: string}
+      - {name: project-id, type: string}
+      steps:
+      - name: fuzz
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-cli-toolkit-plus-feeds:latest
+        envFrom:
+        - secretRef:
+            name: tmm-llm-access
+        env:
+        - {name: MODEL_REF, value: $(params.model-ref)}
+        - {name: TARGETS_JSON, value: $(params.targets-json)}
+        - {name: FUZZ_ENTRY_POINTS, value: $(params.fuzz-entry-points)}
+        - {name: REFUTED_REGISTER, value: $(params.refuted-register)}
+        script: |-
+          set -e
+          export PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
+          REPO="$(workspaces.source.path)/repo/$(params.repo-name)"
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          export WORK
+          mkdir -p "$WORK"
+          CONFIG_HOME="${TRAUST_CONFIG_HOME:-$TRAUST_WORKSPACE/config}"
+          printf 'analysis_results: %s\n' "$WORK" > "$CONFIG_HOME/locations.yaml"
+          pi-setup > /dev/null
+          ENDPOINT_MODEL=$(basename "$(dirname "$MODEL_BASE_URL")")
+          sed -i "s/glm-5\\.3-flash/${ENDPOINT_MODEL}/g; s/\"contextWindow\": 131072/\"contextWindow\": 700000/g; s/\"maxTokens\": 8192/\"maxTokens\": 100000/g" /opt/pi-agent/models.json
+          MODEL_REF="deepsec/${ENDPOINT_MODEL}"
+          echo "fuzz: model $MODEL_REF (endpoint model: $ENDPOINT_MODEL)"
+          WS="$(workspaces.source.path)"
+          FLAGS=""
+          if [ -n "$TARGETS_JSON" ]; then
+            case "$TARGETS_JSON" in /*) TJ="$TARGETS_JSON";; *) TJ="$WS/$TARGETS_JSON";; esac
+            FLAGS="$FLAGS --targets $TJ"
+          else
+            echo "WARNING: no targets.json passed — create-fuzzing consumes target entries (id, repo, language, entry points)"
+          fi
+          if [ -n "$FUZZ_ENTRY_POINTS" ]; then FLAGS="$FLAGS --entry-points $FUZZ_ENTRY_POINTS"; fi
+          if [ -n "$REFUTED_REGISTER" ]; then
+            case "$REFUTED_REGISTER" in /*) RR="$REFUTED_REGISTER";; *) RR="$WS/$REFUTED_REGISTER";; esac
+            FLAGS="$FLAGS --refuted-register $RR"
+          fi
+          timeout 1500 traust-cli run \
+            --harness pi --model "$MODEL_REF" --unsafe-full-permission --no-monitor \
+            create-fuzzing "$REPO" $FLAGS || true
+      workspaces:
+      - name: source
+    workspaces:
+    - {name: source, workspace: source}
   - name: upload
     params:
     - {name: project-id, value: $(params.project-id)}
-    runAfter: [deterministic-scan, threat-model]
+    runAfter: [deterministic-scan, threat-model, fuzz]
     taskSpec:
       params:
       - {name: project-id, type: string}
