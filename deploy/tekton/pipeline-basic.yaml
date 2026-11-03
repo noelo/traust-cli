@@ -1,8 +1,8 @@
 # traust-basic — minimal scan pipeline: clone a repo and run the
 # threat-model (pi agent via traust-cli) and secure-code-audit
 # (deterministic scanner suite) steps. Artifacts land in the workspace
-# PVC under work/traust-basic. No upload stage — retrieve results from
-# the PVC or add an upload task when needed.
+# PVC under work/<project-id>, then the upload stage writes every
+# output file to the in-namespace MinIO (bucket 'reports').
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -12,7 +12,8 @@ spec:
     Clone a repo and process it with the threat-model step (pi agent via
     traust-cli run --harness pi) and the secure-code-audit step
     (gitleaks/opengrep/syft/grype/osv/pip-audit/govulncheck against the
-    baked toolchain rules). Both run in parallel after the clone.
+    baked toolchain rules). Both run in parallel after the clone; the
+    upload stage then pushes all output files to MinIO.
   params:
   - name: repo-url
     type: string
@@ -151,6 +152,60 @@ spec:
           else
             echo "WARNING: no *-threat-model.md produced"
           fi
+      workspaces:
+      - name: source
+  - name: upload
+    runAfter:
+    - secure-code-audit
+    - threat-model
+    taskSpec:
+      steps:
+      - name: upload
+        # Old toolchain image on purpose: boto3 is baked there (the
+        # toolkit-plus-feeds image has no boto3).
+        image: image-registry.openshift-image-registry.svc:5000/deepsec/traust-scan-toolchain:latest
+        env:
+        - name: MINIO_ENDPOINT
+          value: http://minio-service:9000
+        - name: MINIO_USER
+          valueFrom:
+            secretKeyRef:
+              name: minio-secret
+              key: minio_root_user
+        - name: MINIO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: minio-secret
+              key: minio_root_password
+        script: |-
+          set -e
+          WORK="$(workspaces.source.path)/work/$(params.project-id)"
+          export WORK
+          echo "uploading output files from $WORK to MinIO"
+          ls -la "$WORK"
+          python3.11 - <<'PYEOF'
+          import os, glob, boto3
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["MINIO_ENDPOINT"],
+              aws_access_key_id=os.environ["MINIO_USER"],
+              aws_secret_access_key=os.environ["MINIO_PASSWORD"],
+          )
+          bucket = "reports"
+          try:
+              s3.head_bucket(Bucket=bucket)
+          except Exception:
+              s3.create_bucket(Bucket=bucket)
+          prefix = "$(params.project-id)"
+          count = 0
+          for f in sorted(glob.glob(os.path.join(os.environ["WORK"], "*"))):
+              if os.path.isfile(f):
+                  key = f"{prefix}/{os.path.basename(f)}"
+                  s3.upload_file(f, bucket, key)
+                  print(f"uploaded {key} ({os.path.getsize(f)} bytes)")
+                  count += 1
+          print(f"=== uploaded {count} output files to s3://{bucket}/{prefix}/ ===")
+          PYEOF
       workspaces:
       - name: source
     workspaces:
